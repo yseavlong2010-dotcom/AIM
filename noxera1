@@ -1,0 +1,604 @@
+--=============================================================================
+-- [ENGINE]: NOXERA V35 APEX - SUPREME PREMIUM EDITION
+-- [DEV]: Noxera
+-- [MÔ TẢ]: 
+-- + Phục hồi Tab Info (Discord, Update Log).
+-- + Thêm Auto Trash Talk (Tự động gáy khi kill địch).
+-- + Thêm Panic Button (Unload Script xóa dấu vết 100%).
+-- + UI Dark Mode/Neon Green cực mượt. Smart AI Zero-Crash.
+--=============================================================================
+
+local Config = {
+    KeyPass         = "NOXERA2026",
+    ToggleIcon      = "rbxassetid://10631481977", 
+    MenuTitle       = "NOXERA APEX",
+    Version         = "v35.0.0",
+    Creator         = "Noxera",
+    Discord         = "https://discord.gg/wb3VRK5eup",
+
+    AimEnabled      = false,
+    AimPart         = "Head", 
+    AimMode         = "Rage",
+    AimFOV          = 150,
+    Smoothness      = 0.5,
+    Prediction      = 0.155,
+    AutoShoot       = false,
+    ShootDelay      = 0.05,
+    SilentAim       = false,
+    HitboxSize      = 12,
+
+    ESPBox          = false, ESPName = false, ESPHP = false, ESPTracer = false, ESPDistance = false, ESPChams = false,
+    MaxRender       = 3000, ShowTargetDot = false, CustomCrosshair = false,
+    
+    SpeedHack       = false, SpeedValue = 2,
+    JumpHack        = false, InfJump = false, NoClip = false, Fly = false,
+    Fullbright      = false, TeamCheck = true, WallCheck = true,
+    
+    -- TÍNH NĂNG MỚI
+    AutoTrashTalk   = false,
+    TrashMessages   = {
+        "Noxera runs you 🥱", "EZ PZ 🗑️", "Sit down kid 👇", 
+        "Get NOXERA APEX to be good 👑", "Too slow bro 🐢"
+    }
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local LockedTarget = nil
+local LastShootTick = 0
+local Connections = {} -- Lưu trữ kết nối để Unload
+
+--=============================================================================
+-- [PREMIUM UI FRAMEWORK]
+--=============================================================================
+if CoreGui:FindFirstChild("NoxeraV35") then CoreGui.NoxeraV35:Destroy() end
+local Gui = Instance.new("ScreenGui", CoreGui); Gui.Name = "NoxeraV35"; Gui.ResetOnSpawn = false
+
+local function MakeDraggable(TopBar, Object)
+    local Dragging = nil; local DragInput = nil; local DragStart = nil; local StartPosition = nil
+    local function Update(input)
+        local Delta = input.Position - DragStart
+        local pos = UDim2.new(StartPosition.X.Scale, StartPosition.X.Offset + Delta.X, StartPosition.Y.Scale, StartPosition.Y.Offset + Delta.Y)
+        Object.Position = pos
+    end
+    TopBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            Dragging = true; DragStart = input.Position; StartPosition = Object.Position
+            input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then Dragging = false end end)
+        end
+    end)
+    TopBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then DragInput = input end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == DragInput and Dragging then Update(input) end
+    end)
+end
+
+-- 1. THANH PILL MENU (Tự ẩn/hiện)
+local PillMenu = Instance.new("Frame", Gui)
+PillMenu.Size = UDim2.new(0, 180, 0, 40)
+PillMenu.Position = UDim2.new(0.5, -90, 0, 20)
+PillMenu.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Instance.new("UICorner", PillMenu).CornerRadius = UDim.new(1, 0)
+local PillStroke = Instance.new("UIStroke", PillMenu)
+PillStroke.Color = Color3.fromRGB(80, 255, 150); PillStroke.Thickness = 1.5
+
+local PillIcon = Instance.new("ImageLabel", PillMenu)
+PillIcon.Size = UDim2.new(0, 24, 0, 24)
+PillIcon.Position = UDim2.new(0, 10, 0.5, -12)
+PillIcon.BackgroundTransparency = 1
+PillIcon.Image = Config.ToggleIcon
+PillIcon.ImageColor3 = Color3.fromRGB(80, 255, 150)
+
+local PillText = Instance.new("TextLabel", PillMenu)
+PillText.Size = UDim2.new(1, -50, 1, 0)
+PillText.Position = UDim2.new(0, 40, 0, 0)
+PillText.BackgroundTransparency = 1
+PillText.Text = "NOXERA V35"
+PillText.TextColor3 = Color3.fromRGB(255, 255, 255)
+PillText.Font = Enum.Font.GothamBold
+PillText.TextSize = 13
+PillText.TextXAlignment = Enum.TextXAlignment.Left
+
+local OpenBtn = Instance.new("TextButton", PillMenu)
+OpenBtn.Size = UDim2.new(1, 0, 1, 0)
+OpenBtn.BackgroundTransparency = 1
+OpenBtn.Text = ""
+
+MakeDraggable(PillMenu, PillMenu)
+
+-- 2. MAIN MENU
+local MainMenu = Instance.new("Frame", Gui)
+MainMenu.Size = UDim2.new(0, 580, 0, 380)
+MainMenu.Position = UDim2.new(0.5, -290, 0.5, -190)
+MainMenu.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainMenu.ClipsDescendants = true
+MainMenu.Visible = false
+Instance.new("UICorner", MainMenu).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", MainMenu).Color = Color3.fromRGB(40, 40, 50)
+
+local TopBar = Instance.new("Frame", MainMenu)
+TopBar.Size = UDim2.new(1, 0, 0, 45)
+TopBar.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 10)
+MakeDraggable(TopBar, MainMenu)
+
+local BrandTitle = Instance.new("TextLabel", TopBar)
+BrandTitle.Size = UDim2.new(0, 150, 1, 0)
+BrandTitle.Position = UDim2.new(0, 15, 0, 0)
+BrandTitle.BackgroundTransparency = 1
+BrandTitle.Text = Config.MenuTitle
+BrandTitle.TextColor3 = Color3.fromRGB(80, 255, 150)
+BrandTitle.Font = Enum.Font.GothamBlack
+BrandTitle.TextSize = 16
+BrandTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local Badge = Instance.new("Frame", TopBar)
+Badge.Size = UDim2.new(0, 70, 0, 24)
+Badge.Position = UDim2.new(0, 160, 0.5, -12)
+Badge.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Instance.new("UICorner", Badge).CornerRadius = UDim.new(1, 0)
+local BadgeText = Instance.new("TextLabel", Badge)
+BadgeText.Size = UDim2.new(1, 0, 1, 0)
+BadgeText.BackgroundTransparency = 1
+BadgeText.Text = Config.Version
+BadgeText.TextColor3 = Color3.fromRGB(0, 0, 0)
+BadgeText.Font = Enum.Font.GothamBold
+BadgeText.TextSize = 11
+
+local CloseBtn = Instance.new("TextButton", TopBar)
+CloseBtn.Size = UDim2.new(0, 40, 0, 40)
+CloseBtn.Position = UDim2.new(1, -45, 0.5, -20)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+
+OpenBtn.MouseButton1Click:Connect(function()
+    PillMenu.Visible = false
+    MainMenu.Size = UDim2.new(0, 0, 0, 0)
+    MainMenu.Visible = true
+    TweenService:Create(MainMenu, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 580, 0, 380)}):Play()
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    local T = TweenService:Create(MainMenu, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(0, 0, 0, 0)})
+    T:Play(); T.Completed:Wait()
+    MainMenu.Visible = false; PillMenu.Visible = true
+end)
+
+-- BỐ CỤC UI BÊN TRONG
+local Sidebar = Instance.new("ScrollingFrame", MainMenu)
+Sidebar.Size = UDim2.new(0, 150, 1, -55)
+Sidebar.Position = UDim2.new(0, 10, 0, 50)
+Sidebar.BackgroundTransparency = 1
+Sidebar.ScrollBarThickness = 0
+local SidebarLayout = Instance.new("UIListLayout", Sidebar)
+SidebarLayout.Padding = UDim.new(0, 5)
+
+local ContentArea = Instance.new("Frame", MainMenu)
+ContentArea.Size = UDim2.new(1, -180, 1, -60)
+ContentArea.Position = UDim2.new(0, 170, 0, 50)
+ContentArea.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Instance.new("UICorner", ContentArea).CornerRadius = UDim.new(0, 8)
+
+local Tabs = {}; local TabButtons = {}
+
+local function CreateTab(Name, Icon, IsDefault)
+    local Btn = Instance.new("TextButton", Sidebar)
+    Btn.Size = UDim2.new(1, 0, 0, 40)
+    Btn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    Btn.BackgroundTransparency = IsDefault and 0 or 1
+    Btn.Text = "  " .. Icon .. "  " .. Name
+    Btn.TextColor3 = IsDefault and Color3.fromRGB(80, 255, 150) or Color3.fromRGB(150, 150, 150)
+    Btn.Font = Enum.Font.GothamBold; Btn.TextSize = 13; Btn.TextXAlignment = Enum.TextXAlignment.Left
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+
+    local Content = Instance.new("ScrollingFrame", ContentArea)
+    Content.Size = UDim2.new(1, -20, 1, -20)
+    Content.Position = UDim2.new(0, 10, 0, 10)
+    Content.BackgroundTransparency = 1
+    Content.ScrollBarThickness = 2; Content.Visible = IsDefault
+    local Layout = Instance.new("UIListLayout", Content)
+    Layout.Padding = UDim.new(0, 8)
+
+    table.insert(TabButtons, Btn); Tabs[Name] = Content
+
+    Btn.MouseButton1Click:Connect(function()
+        for _, b in pairs(TabButtons) do b.BackgroundTransparency = 1; b.TextColor3 = Color3.fromRGB(150, 150, 150) end
+        for _, c in pairs(Tabs) do c.Visible = false end
+        Btn.BackgroundTransparency = 0; Btn.TextColor3 = Color3.fromRGB(80, 255, 150)
+        Content.Visible = true
+    end)
+    return Content
+end
+
+-- COMPONENTS
+local function CreateToggle(Tab, Text, Key, Callback)
+    local Frame = Instance.new("TextButton", Tab)
+    Frame.Size = UDim2.new(1, -5, 0, 45)
+    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    Frame.Text = ""
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+    
+    local Label = Instance.new("TextLabel", Frame)
+    Label.Size = UDim2.new(1, -70, 1, 0); Label.Position = UDim2.new(0, 15, 0, 0)
+    Label.BackgroundTransparency = 1; Label.Text = Text
+    Label.TextColor3 = Color3.fromRGB(220, 220, 220)
+    Label.Font = Enum.Font.GothamSemibold; Label.TextSize = 13; Label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local SwitchBG = Instance.new("Frame", Frame)
+    SwitchBG.Size = UDim2.new(0, 44, 0, 22); SwitchBG.Position = UDim2.new(1, -55, 0.5, -11)
+    SwitchBG.BackgroundColor3 = Config[Key] and Color3.fromRGB(80, 255, 150) or Color3.fromRGB(50, 50, 60)
+    Instance.new("UICorner", SwitchBG).CornerRadius = UDim.new(1, 0)
+    
+    local SwitchKnob = Instance.new("Frame", SwitchBG)
+    SwitchKnob.Size = UDim2.new(0, 18, 0, 18); SwitchKnob.Position = Config[Key] and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+    SwitchKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", SwitchKnob).CornerRadius = UDim.new(1, 0)
+
+    Frame.MouseButton1Click:Connect(function()
+        Config[Key] = not Config[Key]
+        TweenService:Create(SwitchBG, TweenInfo.new(0.2), {BackgroundColor3 = Config[Key] and Color3.fromRGB(80, 255, 150) or Color3.fromRGB(50, 50, 60)}):Play()
+        TweenService:Create(SwitchKnob, TweenInfo.new(0.2), {Position = Config[Key] and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)}):Play()
+        if Callback then Callback(Config[Key]) end
+    end)
+end
+
+local function CreateDropdown(Tab, Text, Key, Options)
+    local Frame = Instance.new("TextButton", Tab)
+    Frame.Size = UDim2.new(1, -5, 0, 45); Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30); Frame.Text = ""
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+    
+    local Label = Instance.new("TextLabel", Frame)
+    Label.Size = UDim2.new(1, -120, 1, 0); Label.Position = UDim2.new(0, 15, 0, 0); Label.BackgroundTransparency = 1
+    Label.Text = Text; Label.TextColor3 = Color3.fromRGB(220, 220, 220); Label.Font = Enum.Font.GothamSemibold; Label.TextSize = 13; Label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local ValueLabel = Instance.new("TextLabel", Frame)
+    ValueLabel.Size = UDim2.new(0, 100, 1, 0); ValueLabel.Position = UDim2.new(1, -110, 0, 0); ValueLabel.BackgroundTransparency = 1
+    ValueLabel.Text = Config[Key]; ValueLabel.TextColor3 = Color3.fromRGB(80, 255, 150); ValueLabel.Font = Enum.Font.GothamBold; ValueLabel.TextSize = 13; ValueLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+    local index = 1
+    for i, v in ipairs(Options) do if v == Config[Key] then index = i break end end
+
+    Frame.MouseButton1Click:Connect(function()
+        index = index + 1; if index > #Options then index = 1 end
+        Config[Key] = Options[index]; ValueLabel.Text = Config[Key]
+    end)
+end
+
+local function CreateSlider(Tab, Text, Key, Min, Max, Step)
+    local Frame = Instance.new("Frame", Tab)
+    Frame.Size = UDim2.new(1, -5, 0, 60); Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+    
+    local Label = Instance.new("TextLabel", Frame)
+    Label.Size = UDim2.new(1, -30, 0, 30); Label.Position = UDim2.new(0, 15, 0, 0); Label.BackgroundTransparency = 1
+    Label.Text = Text .. ": " .. Config[Key]; Label.TextColor3 = Color3.fromRGB(220, 220, 220); Label.Font = Enum.Font.GothamSemibold; Label.TextSize = 13; Label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local SliderBG = Instance.new("TextButton", Frame)
+    SliderBG.Size = UDim2.new(1, -30, 0, 8); SliderBG.Position = UDim2.new(0, 15, 0, 35); SliderBG.BackgroundColor3 = Color3.fromRGB(40, 40, 50); SliderBG.Text = ""
+    Instance.new("UICorner", SliderBG).CornerRadius = UDim.new(1, 0)
+
+    local Fill = Instance.new("Frame", SliderBG)
+    Fill.Size = UDim2.new((Config[Key] - Min) / (Max - Min), 0, 1, 0); Fill.BackgroundColor3 = Color3.fromRGB(80, 255, 150)
+    Instance.new("UICorner", Fill).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+    local function Update(Input)
+        local X = math.clamp((Input.Position.X - SliderBG.AbsolutePosition.X) / SliderBG.AbsoluteSize.X, 0, 1)
+        local Value = math.floor(((Min + (Max - Min) * X) / Step) + 0.5) * Step
+        Config[Key] = Value; Fill.Size = UDim2.new(X, 0, 1, 0); Label.Text = Text .. ": " .. Value
+    end
+
+    SliderBG.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true; Update(input) end end)
+    UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end end)
+    UserInputService.InputChanged:Connect(function(input) if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then Update(input) end end)
+end
+
+local function CreateButton(Tab, Text, Color, Callback)
+    local Frame = Instance.new("TextButton", Tab)
+    Frame.Size = UDim2.new(1, -5, 0, 40)
+    Frame.BackgroundColor3 = Color or Color3.fromRGB(25, 25, 30)
+    Frame.Text = Text
+    Frame.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Frame.Font = Enum.Font.GothamBold
+    Frame.TextSize = 13
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+    Frame.MouseButton1Click:Connect(Callback)
+end
+
+local function CreateLabelInfo(Tab, Text, Color)
+    local Label = Instance.new("TextLabel", Tab)
+    Label.Size = UDim2.new(1, -5, 0, 20)
+    Label.BackgroundTransparency = 1
+    Label.Text = Text
+    Label.TextColor3 = Color or Color3.fromRGB(150, 150, 150)
+    Label.Font = Enum.Font.Gotham
+    Label.TextSize = 12
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+--=============================================================================
+-- [TẠO TABS VÀ ĐIỀN TÍNH NĂNG]
+--=============================================================================
+local TabCombat = CreateTab("Combat", "🎯", true)
+local TabVisuals = CreateTab("Visuals", "👁", false)
+local TabMovement = CreateTab("Movement", "🏃", false)
+local TabMisc = CreateTab("Fun & Misc", "🎭", false)
+local TabInfo = CreateTab("Info & Setting", "⚙", false)
+
+-- Combat
+CreateToggle(TabCombat, "Target Lock (Aim)", "AimEnabled")
+CreateToggle(TabCombat, "Raycast AutoShoot (Tự Bắn)", "AutoShoot")
+CreateDropdown(TabCombat, "Aim Part", "AimPart", {"Head", "Torso", "HumanoidRootPart"})
+CreateDropdown(TabCombat, "Aim Mode", "AimMode", {"Rage", "Legit"})
+CreateToggle(TabCombat, "Smart Team & KO Check", "TeamCheck")
+CreateToggle(TabCombat, "Wall Check (Xuyên tường)", "WallCheck")
+CreateToggle(TabCombat, "Hitbox Hút Đạn (Silent Aim)", "SilentAim", function(state)
+    if not state then
+        -- Trả lại Hitbox cũ ngay khi tắt
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                p.Character.HumanoidRootPart.Size = Vector3.new(2, 2, 1); p.Character.HumanoidRootPart.Transparency = 1
+            end
+        end
+    end
+end)
+CreateSlider(TabCombat, "Hitbox Size", "HitboxSize", 5, 50, 1)
+CreateSlider(TabCombat, "Aim FOV", "AimFOV", 10, 500, 10)
+CreateSlider(TabCombat, "Smoothness (For Legit)", "Smoothness", 0.05, 1, 0.05)
+
+-- Visuals
+CreateToggle(TabVisuals, "ESP Box", "ESPBox")
+CreateToggle(TabVisuals, "ESP Name", "ESPName")
+CreateToggle(TabVisuals, "ESP Health", "ESPHP")
+CreateToggle(TabVisuals, "ESP Distance", "ESPDistance")
+CreateToggle(TabVisuals, "ESP Chams (Màu 3D)", "ESPChams", function(state)
+    if not state then for _, p in ipairs(Players:GetPlayers()) do if p.Character and p.Character:FindFirstChild("NoxChams") then p.Character.NoxChams:Destroy() end end end
+end)
+CreateToggle(TabVisuals, "Show Prediction Dot", "ShowTargetDot")
+
+-- Movement
+CreateToggle(TabMovement, "CFrame Speed", "SpeedHack")
+CreateSlider(TabMovement, "Speed Value", "SpeedValue", 1, 10, 1)
+CreateToggle(TabMovement, "Infinite Jump", "InfJump")
+CreateToggle(TabMovement, "NoClip", "NoClip")
+
+-- Misc / Fun
+CreateToggle(TabMisc, "Auto Trash Talk (Gáy khi kill)", "AutoTrashTalk")
+CreateButton(TabMisc, "Server Hop (Đổi máy chủ)", Color3.fromRGB(40, 40, 50), function()
+    local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100"))
+    for _, s in pairs(servers.data) do
+        if s.playing < s.maxPlayers and s.id ~= game.JobId then
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LocalPlayer); break
+        end
+    end
+end)
+CreateButton(TabMisc, "Rejoin Server (Vào lại)", Color3.fromRGB(40, 40, 50), function()
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+end)
+
+-- Info & Settings
+CreateLabelInfo(TabInfo, "Tác giả: " .. Config.Creator, Color3.fromRGB(255, 255, 255))
+CreateLabelInfo(TabInfo, "Cộng đồng: " .. Config.Discord, Color3.fromRGB(80, 255, 150))
+CreateLabelInfo(TabInfo, "Phiên bản: " .. Config.Version)
+CreateLabelInfo(TabInfo, "----------------------------")
+CreateLabelInfo(TabInfo, "[+] Thêm Auto Trash Talk (Gáy).")
+CreateLabelInfo(TabInfo, "[+] Thêm Panic Button (Unload).")
+CreateLabelInfo(TabInfo, "[+] Fix kẹt Hitbox khổng lồ.")
+CreateLabelInfo(TabInfo, "----------------------------")
+
+CreateButton(TabInfo, "💀 UNLOAD SCRIPT (Xóa Dấu Vết)", Color3.fromRGB(255, 50, 50), function()
+    -- XÓA TẤT CẢ VÀ ĐÓNG SCRIPT
+    for _, conn in ipairs(Connections) do conn:Disconnect() end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if ESP_Cache[p] then for _, v in pairs(ESP_Cache[p]) do v:Remove() end end
+        if p.Character and p.Character:FindFirstChild("NoxChams") then p.Character.NoxChams:Destroy() end
+        if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            p.Character.HumanoidRootPart.Size = Vector3.new(2, 2, 1); p.Character.HumanoidRootPart.Transparency = 1
+        end
+    end
+    FOVCircle:Remove(); TargetDot:Remove(); CrossX:Remove(); CrossY:Remove()
+    Gui:Destroy()
+end)
+
+--=============================================================================
+-- [CORE UNIVERSAL ENGINE & LOGIC]
+--=============================================================================
+local ESP_Library = {}
+local FOVCircle = Drawing.new("Circle"); FOVCircle.Thickness = 1.5; FOVCircle.Filled = false
+local TargetDot = Drawing.new("Circle"); TargetDot.Radius = 4; TargetDot.Filled = true; TargetDot.Color = Color3.fromRGB(255, 50, 50)
+local CrossX = Drawing.new("Line"); CrossX.Thickness = 1.5; CrossX.Color = Color3.fromRGB(0, 255, 0); CrossY = Drawing.new("Line"); CrossY.Thickness = 1.5; CrossY.Color = Color3.fromRGB(0, 255, 0)
+
+local function SendChat(msg)
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            TextChatService.TextChannels.RBXGeneral:SendAsync(msg)
+        else
+            ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+        end
+    end)
+end
+
+local function IsValidTarget(Player)
+    if Player == LocalPlayer then return false end
+    local Char = Player.Character
+    if not Char then return false end
+    local Hum = Char:FindFirstChildOfClass("Humanoid")
+    if not Hum or Hum.Health <= 0 then return false end
+    if not Char:FindFirstChild("HumanoidRootPart") then return false end
+
+    if Config.TeamCheck and LocalPlayer.Team and Player.Team and LocalPlayer.Team == Player.Team then return false end
+    if Char:FindFirstChild("BodyEffects") then
+        local KO = Char.BodyEffects:FindFirstChild("K.O") or Char.BodyEffects:FindFirstChild("KO")
+        if KO and KO.Value == true then return false end
+    end
+    return true
+end
+
+local function GetAimPart(Char)
+    if Config.AimPart == "Torso" then return Char:FindFirstChild("UpperTorso") or Char:FindFirstChild("Torso") or Char:FindFirstChild("HumanoidRootPart") end
+    return Char:FindFirstChild(Config.AimPart) or Char:FindFirstChild("HumanoidRootPart")
+end
+
+-- VÒNG LẶP CHÍNH
+local loop = RunService.RenderStepped:Connect(function(deltaTime)
+    pcall(function()
+        Camera = Workspace.CurrentCamera
+        local Center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        
+        -- Hiệu ứng nhịp đập FOV khi Lock
+        if LockedTarget then
+            FOVCircle.Radius = math.lerp(FOVCircle.Radius, Config.AimFOV - 5, 0.2)
+            FOVCircle.Color = Color3.fromRGB(80, 255, 150)
+        else
+            FOVCircle.Radius = math.lerp(FOVCircle.Radius, Config.AimFOV, 0.2)
+            FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+        end
+        FOVCircle.Position = Center; FOVCircle.Visible = Config.AimEnabled
+
+        -- 1. PHYSICS & MISC
+        local MyChar = LocalPlayer.Character
+        local MyHum = MyChar and MyChar:FindFirstChildOfClass("Humanoid")
+        local MyHRP = MyChar and MyChar:FindFirstChild("HumanoidRootPart")
+
+        if MyHum and MyHRP then
+            if Config.SpeedHack and MyHum.MoveDirection.Magnitude > 0 then
+                MyHRP.CFrame = MyHRP.CFrame + (MyHum.MoveDirection * Config.SpeedValue * deltaTime * 10)
+            end
+        end
+        if Config.NoClip and MyChar then for _, v in pairs(MyChar:GetDescendants()) do if v:IsA("BasePart") and v.CanCollide then v.CanCollide = false end end end
+
+        -- 2. ESP & AIMBOT LOGIC
+        if LockedTarget then
+            local Player = Players:GetPlayerFromCharacter(LockedTarget.Parent)
+            
+            -- [TÍNH NĂNG MỚI]: Kiểm tra Kill địch để Gáy
+            if Player and Player.Character and Player.Character:FindFirstChild("Humanoid") then
+                if Player.Character.Humanoid.Health <= 0 then
+                    if Config.AutoTrashTalk then SendChat(Config.TrashMessages[math.random(1, #Config.TrashMessages)]) end
+                    LockedTarget = nil
+                end
+            end
+
+            if not Player or not IsValidTarget(Player) then LockedTarget = nil else
+                local Pos, OnScreen = Camera:WorldToViewportPoint(LockedTarget.Position)
+                if not OnScreen or (Vector2.new(Pos.X, Pos.Y) - Center).Magnitude > (Config.AimFOV * 1.5) then LockedTarget = nil end
+            end
+        end
+
+        local BestDist = Config.AimFOV
+
+        for _, Player in ipairs(Players:GetPlayers()) do
+            if not IsValidTarget(Player) then
+                if ESP_Library[Player] then for _, v in pairs(ESP_Library[Player]) do v.Visible = false end end
+                if Player.Character and Player.Character:FindFirstChild("NoxChams") then Player.Character.NoxChams:Destroy() end
+                continue
+            end
+
+            local Char = Player.Character
+            local HRP = Char:FindFirstChild("HumanoidRootPart")
+            local Head = Char:FindFirstChild("Head") or HRP
+            local Hum = Char:FindFirstChildOfClass("Humanoid")
+
+            if Config.SilentAim then
+                HRP.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
+                HRP.Transparency = 1; HRP.CanCollide = false
+            end
+
+            if Config.ESPChams then
+                if not Char:FindFirstChild("NoxChams") then
+                    local hl = Instance.new("Highlight", Char); hl.Name = "NoxChams"; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                end
+                Char.NoxChams.FillColor = (LockedTarget and LockedTarget.Parent == Char) and Color3.fromRGB(80, 255, 150) or Color3.fromRGB(255, 50, 50)
+            end
+
+            local Pos, OnScreen = Camera:WorldToViewportPoint(HRP.Position)
+            local Dist3D = math.floor((Camera.CFrame.Position - HRP.Position).Magnitude)
+
+            if OnScreen and Dist3D <= Config.MaxRender and (Config.ESPBox or Config.ESPName or Config.ESPHP or Config.ESPDistance) then
+                if not ESP_Library[Player] then
+                    ESP_Library[Player] = { Box = Drawing.new("Square"), Name = Drawing.new("Text"), HP = Drawing.new("Square"), Dist = Drawing.new("Text") }
+                    local e = ESP_Library[Player]
+                    e.Box.Thickness = 1.5; e.Box.Filled = false
+                    e.Name.Size = 14; e.Name.Center = true; e.Name.Outline = true; e.Name.Color = Color3.fromRGB(255, 255, 255)
+                    e.HP.Filled = true; e.Dist.Size = 12; e.Dist.Center = true; e.Dist.Outline = true; e.Dist.Color = Color3.fromRGB(200, 200, 200)
+                end
+                
+                local Top, _ = Camera:WorldToViewportPoint(Head.Position + Vector3.new(0, 0.5, 0))
+                local Bot, _ = Camera:WorldToViewportPoint(HRP.Position - Vector3.new(0, 3, 0))
+                local BoxH = math.abs(Top.Y - Bot.Y); local BoxW = BoxH * 0.55
+                local e = ESP_Library[Player]
+                
+                local espColor = (LockedTarget and LockedTarget.Parent == Char) and Color3.fromRGB(80, 255, 150) or Color3.fromRGB(255, 255, 255)
+                
+                e.Box.Size = Vector2.new(BoxW, BoxH); e.Box.Position = Vector2.new(Top.X - BoxW/2, Top.Y); e.Box.Color = espColor; e.Box.Visible = Config.ESPBox
+                e.Name.Text = Player.Name; e.Name.Position = Vector2.new(Top.X, Top.Y - 15); e.Name.Visible = Config.ESPName
+                e.HP.Size = Vector2.new(2, BoxH * (Hum.Health/Hum.MaxHealth)); e.HP.Position = Vector2.new(Top.X - BoxW/2 - 5, Bot.Y - e.HP.Size.Y); e.HP.Color = Color3.fromRGB(0, 255, 0); e.HP.Visible = Config.ESPHP
+                e.Dist.Text = "[" .. Dist3D .. "m]"; e.Dist.Position = Vector2.new(Top.X, Bot.Y + 2); e.Dist.Visible = Config.ESPDistance
+            else
+                if ESP_Library[Player] then for _, v in pairs(ESP_Library[Player]) do v.Visible = false end end
+            end
+
+            -- Smart Aim Selection
+            local AimP = GetAimPart(Char)
+            if AimP and Config.AimEnabled and not LockedTarget and OnScreen then
+                local APos = Camera:WorldToViewportPoint(AimP.Position)
+                local Dist2D = (Vector2.new(APos.X, APos.Y) - Center).Magnitude
+                if Dist2D < BestDist then
+                    local RayParams = RaycastParams.new(); RayParams.FilterType = Enum.RaycastFilterType.Exclude; RayParams.FilterDescendantsInstances = {Camera, MyChar, Workspace:FindFirstChild("Ignored")}
+                    local Ray = Workspace:Raycast(Camera.CFrame.Position, AimP.Position - Camera.CFrame.Position, RayParams)
+                    if not Config.WallCheck or (not Ray or Ray.Instance:IsDescendantOf(Char)) then
+                        BestDist = Dist2D; LockedTarget = AimP
+                    end
+                end
+            end
+        end
+
+        -- 3. EXECUTE AIM & AUTO SHOOT
+        if Config.AimEnabled and LockedTarget then
+            local PredPos = LockedTarget.Position + (LockedTarget.Velocity * Config.Prediction)
+            if Config.AimMode == "Rage" then Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, PredPos)
+            else Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(Camera.CFrame.Position, PredPos), Config.Smoothness) end
+
+            if Config.ShowTargetDot then
+                local dp, ds = Camera:WorldToViewportPoint(PredPos)
+                if ds then TargetDot.Position = Vector2.new(dp.X, dp.Y); TargetDot.Visible = true else TargetDot.Visible = false end
+            else TargetDot.Visible = false end
+            
+            if Config.AutoShoot and tick() - LastShootTick > Config.ShootDelay then
+                local Tool = MyChar and MyChar:FindFirstChildOfClass("Tool")
+                if Tool then Tool:Activate(); LastShootTick = tick() end
+            end
+        else TargetDot.Visible = false end
+    end)
+end)
+table.insert(Connections, loop)
+
+local jumpCon = UserInputService.JumpRequest:Connect(function()
+    if Config.InfJump and LocalPlayer.Character then
+        local Hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if Hum then Hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+table.insert(Connections, jumpCon)
+
+local leaveCon = Players.PlayerRemoving:Connect(function(P)
+    if ESP_Library[P] then for _, v in pairs(ESP_Library[P]) do v:Remove() end; ESP_Library[P] = nil end
+end)
+table.insert(Connections, leaveCon)
