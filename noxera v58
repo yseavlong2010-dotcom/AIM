@@ -1,0 +1,658 @@
+--=============================================================================
+-- [ENGINE]: NOXERA V58 WARLORD - SURVIVAL & COMBAT HUD
+-- [FOUNDER]: @_noxera.
+-- [DEV]: palofsc
+-- [PLATFORM]: Roblox Universal (Tối ưu Delta/Mobile Touch)
+-- [BẢN NÂNG CẤP V58 WARLORD]:
+-- 1. [New]: Quick Aim Widget - Nút Tắt/Bật ngắm nhanh ngoài màn hình (Kéo thả/Khóa).
+-- 2. [New]: Target Info HUD - Hiển thị Tên, HP, Khoảng cách của mục tiêu bị khóa.
+-- 3. [Logic]: Đồng bộ hóa state giữa Quick Widget và Main Menu.
+-- 4. [Core]: Giữ nguyên Anti-Freeze Guard và OMNI Engine từ V57.
+--=============================================================================
+
+local Config = {
+    -- COMBAT
+    AimEnabled      = false, SilentAim = false, AimMethod = "Camera", AimPart = "Head", AimMode = "Bezier",
+    AimFOV          = 150, DynamicFOV = false, Smoothness = 4, BulletSpeed = 1000, GravityDrop = 0,
+    Resolver        = false, AutoShoot = false, ShootMethod = "Mouse API", ShootDelay = 0.05, TriggerBot = false,
+    WallCheck       = true, TeamCheck = true,
+
+    -- SURVIVAL & MOVEMENT
+    TargetStrafe    = false, StrafeSpeed = 5, StrafeRadius = 15, StrafeHeight = 5,
+    AntiAim         = false, AntiAimSpeed = 100,
+
+    -- HITBOX
+    HitboxExpander  = false, HitboxSize = 12, HitboxTrans = 1,
+
+    -- VISUALS & FUN
+    RGBMode         = false, HitSound = false, HitMarker = false, KillSay = false,
+    ESPBox          = false, ESPName = false, ESPHP = false, ESPChams = false, ChamsMaterial = "ForceField",
+    ESPSkeleton     = false, OOFArrows = false, BulletTracers = false,
+    MaxRender       = 3000, ShowTargetDot = false, CustomCrosshair = false, Watermark = true,
+    
+    -- HUD & WIDGETS (NEW V58)
+    ShowQuickBtn    = true, LockQuickBtn = false, TargetHUD = true,
+    
+    -- MISC & WORLD
+    SpeedHack       = false, SpeedValue = 2, JumpHack = false, InfJump = false, NoClip = false, 
+    Fly = false, FlySpeed = 50, SpinBot = false, SpinSpeed = 50,
+    ClockTime       = 14, CameraFOV = 70, Fullbright = false, LowDetail = false
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local Stats = game:GetService("Stats")
+local HttpService = game:GetService("HttpService")
+local VIM = game:GetService("VirtualInputManager")
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local LockedTarget, SilentTarget = nil, nil
+local LastShootTick, LastTargetHealth = 0, 100
+local HM_Alpha, ChromaHue, StrafeAngle = 0, 0, 0
+local Connections = {}
+local HasMouseMoverel = (typeof(mousemoverel) == "function")
+if not HasMouseMoverel then Config.AimMethod = "Camera" end
+
+local ToxicMessages = {
+    "NOXERA V58 👑 - KẺ HỦY DIỆT TỐI THƯỢNG.",
+    "Khóc đi, Noxera không có sự thương hại.",
+    "Bị quét sạch bởi công nghệ V58 WARLORD.",
+    "1 Tạp vào mồm 🤫",
+}
+
+local HitAudio = Instance.new("Sound", CoreGui)
+HitAudio.SoundId = "rbxassetid://4753603610"; HitAudio.Volume = 5
+
+local ConfigName = "NoxeraV58_Warlord.json"
+local function SaveConfig()
+    if writefile then task.spawn(function() local s = {} for k,v in pairs(Config) do if type(v)~="userdata" then s[k]=v end end pcall(function() writefile(ConfigName, HttpService:JSONEncode(s)) end) end) end
+end
+local function LoadConfig()
+    if readfile and isfile and isfile(ConfigName) then 
+        local success = pcall(function() 
+            local d = HttpService:JSONDecode(readfile(ConfigName)) 
+            for k,v in pairs(d) do if Config[k]~=nil then Config[k]=v end end 
+        end)
+        return success
+    end
+    return false
+end
+
+local CoreUI = gethui and gethui() or (syn and syn.protect_gui and CoreGui or CoreGui)
+if CoreUI:FindFirstChild("NoxeraV58") then CoreUI.NoxeraV58:Destroy() end
+local Gui = Instance.new("ScreenGui", CoreUI); Gui.Name = "NoxeraV58"; Gui.ResetOnSpawn = false
+if syn and syn.protect_gui then syn.protect_gui(Gui) end
+
+--=============================================================================
+-- [UI KERNEL V58 - THEME & CORE FUNCTIONS]
+--=============================================================================
+local Theme = {
+    BG = Color3.fromRGB(15, 15, 20), TabBG = Color3.fromRGB(22, 22, 28),
+    Accent = Color3.fromRGB(255, 60, 60), -- Đỏ Máu Chiến Thần
+    AccentOff = Color3.fromRGB(80, 80, 90),
+    Text = Color3.fromRGB(250, 250, 250), Dim = Color3.fromRGB(130, 130, 140)
+}
+local AccentObjects = {}
+
+local function MakeDraggable(Top, Obj, CheckLock)
+    local drag, start, pos
+    Top.InputBegan:Connect(function(i) 
+        if CheckLock and Config.LockQuickBtn then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+            drag = true; start = i.Position; pos = Obj.Position
+            i.Changed:Connect(function() if i.UserInputState == Enum.UserInputState.End then drag = false end end) 
+        end 
+    end)
+    UserInputService.InputChanged:Connect(function(i) 
+        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then 
+            Obj.Position = UDim2.new(pos.X.Scale, pos.X.Offset + (i.Position - start).X, pos.Y.Scale, pos.Y.Offset + (i.Position - start).Y) 
+        end 
+    end)
+end
+
+--=============================================================================
+-- [NEW V58: WIDGETS & HUD]
+--=============================================================================
+-- 1. WATERMARK
+local Watermark = Instance.new("TextLabel", Gui)
+Watermark.Size, Watermark.Position, Watermark.BackgroundColor3, Watermark.TextColor3, Watermark.Font, Watermark.TextSize = UDim2.new(0, 320, 0, 26), UDim2.new(0, 15, 0, 15), Theme.BG, Theme.Text, Enum.Font.GothamBold, 11
+Instance.new("UICorner", Watermark).CornerRadius = UDim.new(0, 6)
+local WM_Stroke = Instance.new("UIStroke", Watermark); WM_Stroke.Color = Theme.Accent; table.insert(AccentObjects, WM_Stroke)
+_G.NoxeraWatermark = Watermark 
+
+-- 2. QUICK AIM WIDGET (NÚT BẬT/TẮT NHANH)
+local QuickBtnFrame = Instance.new("Frame", Gui)
+QuickBtnFrame.Size = UDim2.new(0, 50, 0, 50)
+QuickBtnFrame.Position = UDim2.new(1, -70, 0.5, -25) -- Mặc định bên phải màn hình
+QuickBtnFrame.BackgroundColor3 = Theme.TabBG
+QuickBtnFrame.Active = true
+QuickBtnFrame.Visible = Config.ShowQuickBtn
+Instance.new("UICorner", QuickBtnFrame).CornerRadius = UDim.new(1, 0)
+local QB_Stroke = Instance.new("UIStroke", QuickBtnFrame); QB_Stroke.Thickness = 2
+QB_Stroke.Color = Config.AimEnabled and Color3.fromRGB(0, 255, 100) or Theme.AccentOff
+
+local QuickBtnTxt = Instance.new("TextButton", QuickBtnFrame)
+QuickBtnTxt.Size = UDim2.new(1, 0, 1, 0); QuickBtnTxt.BackgroundTransparency = 1
+QuickBtnTxt.Text = "🎯"; QuickBtnTxt.TextSize = 25
+MakeDraggable(QuickBtnTxt, QuickBtnFrame, true)
+
+-- Đồng bộ nút bấm
+QuickBtnTxt.MouseButton1Click:Connect(function()
+    Config.AimEnabled = not Config.AimEnabled
+    TweenService:Create(QB_Stroke, TweenInfo.new(0.3), {Color = Config.AimEnabled and Color3.fromRGB(0, 255, 100) or Theme.AccentOff}):Play()
+end)
+
+-- 3. TARGET INFO HUD
+local TargetHUD = Instance.new("Frame", Gui)
+TargetHUD.Size = UDim2.new(0, 200, 0, 50)
+TargetHUD.Position = UDim2.new(0.5, -100, 0, 70)
+TargetHUD.BackgroundColor3 = Theme.BG
+TargetHUD.Visible = false
+Instance.new("UICorner", TargetHUD).CornerRadius = UDim.new(0, 8)
+local HUD_Stroke = Instance.new("UIStroke", TargetHUD); HUD_Stroke.Color = Theme.Accent; table.insert(AccentObjects, HUD_Stroke)
+
+local HUD_Name = Instance.new("TextLabel", TargetHUD)
+HUD_Name.Size = UDim2.new(1, -10, 0, 20); HUD_Name.Position = UDim2.new(0, 10, 0, 5)
+HUD_Name.BackgroundTransparency = 1; HUD_Name.Text = "Target: None"; HUD_Name.TextColor3 = Theme.Text; HUD_Name.Font = Enum.Font.GothamBold; HUD_Name.TextSize = 12; HUD_Name.TextXAlignment = Enum.TextXAlignment.Left
+
+local HUD_HP = Instance.new("TextLabel", TargetHUD)
+HUD_HP.Size = UDim2.new(1, -10, 0, 20); HUD_HP.Position = UDim2.new(0, 10, 0, 25)
+HUD_HP.BackgroundTransparency = 1; HUD_HP.Text = "HP: 0 | Dist: 0m"; HUD_HP.TextColor3 = Theme.Dim; HUD_HP.Font = Enum.Font.GothamSemibold; HUD_HP.TextSize = 11; HUD_HP.TextXAlignment = Enum.TextXAlignment.Left
+
+-- 4. FLOATING TOGGLE MENU BUTTON
+local ToggleFrame = Instance.new("Frame", Gui)
+ToggleFrame.Size = UDim2.new(0, 150, 0, 36)
+ToggleFrame.Position = UDim2.new(0.5, -75, 0, 15)
+ToggleFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+ToggleFrame.Active = true
+Instance.new("UICorner", ToggleFrame).CornerRadius = UDim.new(1, 0)
+local TogStroke = Instance.new("UIStroke", ToggleFrame); TogStroke.Color = Theme.Accent; TogStroke.Thickness = 1.5; table.insert(AccentObjects, TogStroke)
+
+local ToggleBtn = Instance.new("TextButton", ToggleFrame)
+ToggleBtn.Size = UDim2.new(1, 0, 1, 0); ToggleBtn.BackgroundTransparency = 1
+ToggleBtn.Text = "❖ OPEN MENU"; ToggleBtn.TextColor3 = Theme.Text; ToggleBtn.Font = Enum.Font.GothamBold; ToggleBtn.TextSize = 12
+MakeDraggable(ToggleFrame, ToggleFrame, false)
+
+--=============================================================================
+-- [MAIN MENU CONSTRUCTION]
+--=============================================================================
+local Main = Instance.new("Frame", Gui)
+Main.Size, Main.Position, Main.AnchorPoint, Main.BackgroundColor3, Main.ClipsDescendants = UDim2.new(0, 600, 0, 380), UDim2.new(0.5, 0, 0.5, 0), Vector2.new(0.5, 0.5), Theme.BG, true
+Main.Visible = false
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 8)
+local M_Stroke = Instance.new("UIStroke", Main); M_Stroke.Color = Theme.Accent; M_Stroke.Thickness = 1.5; table.insert(AccentObjects, M_Stroke)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Main.Visible = not Main.Visible
+    ToggleBtn.Text = Main.Visible and "❖ CLOSE MENU" or "❖ OPEN MENU"
+    ToggleBtn.TextColor3 = Main.Visible and Theme.Accent or Theme.Text
+end)
+
+local Top = Instance.new("Frame", Main)
+Top.Size, Top.BackgroundColor3 = UDim2.new(1, 0, 0, 45), Theme.TabBG; Instance.new("UICorner", Top).CornerRadius = UDim.new(0, 8)
+MakeDraggable(Top, Main, false)
+
+local Title = Instance.new("TextLabel", Top)
+Title.Size, Title.Position, Title.BackgroundTransparency, Title.Text, Title.TextColor3, Title.Font, Title.TextSize, Title.TextXAlignment = UDim2.new(0, 300, 1, 0), UDim2.new(0, 15, 0, 0), 1, Config.MenuTitle, Theme.Accent, Enum.Font.GothamBlack, 15, Enum.TextXAlignment.Left
+table.insert(AccentObjects, Title)
+
+local CloseBtn = Instance.new("TextButton", Top)
+CloseBtn.Size, CloseBtn.Position, CloseBtn.BackgroundTransparency, CloseBtn.Text, CloseBtn.TextColor3, CloseBtn.Font, CloseBtn.TextSize = UDim2.new(0, 45, 1, 0), UDim2.new(1, -45, 0, 0), 1, "X", Theme.Dim, Enum.Font.GothamBold, 15
+CloseBtn.MouseButton1Click:Connect(function() Main.Visible = false; ToggleBtn.Text = "❖ OPEN MENU"; ToggleBtn.TextColor3 = Theme.Text end)
+
+local Side = Instance.new("ScrollingFrame", Main)
+Side.Size, Side.Position, Side.BackgroundTransparency, Side.ScrollBarThickness = UDim2.new(0, 140, 1, -55), UDim2.new(0, 10, 0, 50), 1, 0
+local S_Layout = Instance.new("UIListLayout", Side); S_Layout.Padding = UDim.new(0, 4); S_Layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local Cont = Instance.new("Frame", Main)
+Cont.Size, Cont.Position, Cont.BackgroundColor3 = UDim2.new(1, -170, 1, -55), UDim2.new(0, 160, 0, 50), Theme.TabBG
+Instance.new("UICorner", Cont).CornerRadius = UDim.new(0, 6); Instance.new("UIStroke", Cont).Color = Color3.fromRGB(30, 30, 35)
+
+local Tabs, T_Btns, T_Order = {}, {}, 0
+
+local function CreateTab(Name, Icon, Def)
+    T_Order = T_Order + 1
+    local B = Instance.new("TextButton", Side)
+    B.LayoutOrder = T_Order; B.Size, B.BackgroundColor3, B.BackgroundTransparency = UDim2.new(1, 0, 0, 38), Theme.TabBG, Def and 0 or 1
+    B.Text, B.TextColor3, B.Font, B.TextSize, B.TextXAlignment = "   " .. Icon .. " " .. Name, Def and Theme.Accent or Theme.Dim, Enum.Font.GothamBold, 12, Enum.TextXAlignment.Left
+    Instance.new("UICorner", B).CornerRadius = UDim.new(0, 4); if Def then table.insert(AccentObjects, B) end
+    Side.CanvasSize = UDim2.new(0, 0, 0, T_Order * 42 + 10)
+
+    local C = Instance.new("ScrollingFrame", Cont)
+    C.Size, C.Position, C.BackgroundTransparency, C.ScrollBarThickness, C.Visible = UDim2.new(1, -16, 1, -16), UDim2.new(0, 8, 0, 8), 1, 2, Def
+    local L = Instance.new("UIListLayout", C); L.Padding = UDim.new(0, 6); L.SortOrder = Enum.SortOrder.LayoutOrder
+    
+    table.insert(T_Btns, B); Tabs[Name] = {F = C, L = L, Items = 0}
+
+    B.MouseButton1Click:Connect(function()
+        for _, b in pairs(T_Btns) do TweenService:Create(b, TweenInfo.new(0.2), {BackgroundTransparency = 1, TextColor3 = Theme.Dim}):Play(); for i=#AccentObjects,1,-1 do if AccentObjects[i]==b then table.remove(AccentObjects,i) end end end
+        for _, c in pairs(Tabs) do c.F.Visible = false end
+        TweenService:Create(B, TweenInfo.new(0.2), {BackgroundTransparency = 0, TextColor3 = Theme.Accent}):Play(); table.insert(AccentObjects, B); C.Visible = true
+    end)
+    return Name
+end
+
+local function AddCanvas(T_Name, Y) Tabs[T_Name].Items = Tabs[T_Name].Items + 1; Tabs[T_Name].F.CanvasSize = UDim2.new(0, 0, 0, Tabs[T_Name].Items * Y + (Tabs[T_Name].Items * 6) + 10) end
+
+local function CreateToggle(T_Name, Txt, Key, Cb)
+    local F = Instance.new("TextButton", Tabs[T_Name].F); F.Size, F.BackgroundColor3, F.Text = UDim2.new(1, 0, 0, 40), Theme.BG, ""; Instance.new("UICorner", F).CornerRadius = UDim.new(0, 4)
+    local L = Instance.new("TextLabel", F); L.Size, L.Position, L.BackgroundTransparency, L.Text, L.TextColor3, L.Font, L.TextSize, L.TextXAlignment = UDim2.new(1, -60, 1, 0), UDim2.new(0, 10, 0, 0), 1, Txt, Theme.Text, Enum.Font.GothamSemibold, 12, Enum.TextXAlignment.Left
+    local SB = Instance.new("Frame", F); SB.Size, SB.Position, SB.BackgroundColor3 = UDim2.new(0, 34, 0, 16), UDim2.new(1, -44, 0.5, -8), Config[Key] and Theme.Accent or Color3.fromRGB(50, 50, 55); Instance.new("UICorner", SB).CornerRadius = UDim.new(1, 0)
+    local SK = Instance.new("Frame", SB); SK.Size, SK.Position, SK.BackgroundColor3 = UDim2.new(0, 12, 0, 12), Config[Key] and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6), Color3.new(1,1,1); Instance.new("UICorner", SK).CornerRadius = UDim.new(1, 0)
+    if Config[Key] then table.insert(AccentObjects, SB) end
+    F.MouseButton1Click:Connect(function()
+        Config[Key] = not Config[Key]; SaveConfig()
+        if Config[Key] then table.insert(AccentObjects, SB) else for i=#AccentObjects,1,-1 do if AccentObjects[i]==SB then table.remove(AccentObjects,i) end end end
+        TweenService:Create(SB, TweenInfo.new(0.2), {BackgroundColor3 = Config[Key] and Theme.Accent or Color3.fromRGB(50, 50, 55)}):Play()
+        TweenService:Create(SK, TweenInfo.new(0.2), {Position = Config[Key] and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6)}):Play()
+        if Cb then task.spawn(Cb, Config[Key]) end
+        -- Special Sync for AimEnabled Toggle
+        if Key == "AimEnabled" and QuickBtnFrame then
+            TweenService:Create(QB_Stroke, TweenInfo.new(0.3), {Color = Config.AimEnabled and Color3.fromRGB(0, 255, 100) or Theme.AccentOff}):Play()
+        end
+    end); AddCanvas(T_Name, 40)
+end
+
+local function CreateSlider(T_Name, Txt, Key, Min, Max, Step)
+    local F = Instance.new("Frame", Tabs[T_Name].F); F.Size, F.BackgroundColor3 = UDim2.new(1, 0, 0, 50), Theme.BG; Instance.new("UICorner", F).CornerRadius = UDim.new(0, 4)
+    local L = Instance.new("TextLabel", F); L.Size, L.Position, L.BackgroundTransparency, L.Text, L.TextColor3, L.Font, L.TextSize, L.TextXAlignment = UDim2.new(1, -20, 0, 20), UDim2.new(0, 10, 0, 4), 1, Txt .. ": " .. Config[Key], Theme.Text, Enum.Font.GothamSemibold, 11, Enum.TextXAlignment.Left
+    local SB = Instance.new("TextButton", F); SB.Size, SB.Position, SB.BackgroundColor3, SB.Text = UDim2.new(1, -20, 0, 6), UDim2.new(0, 10, 0, 32), Color3.fromRGB(40, 40, 45), ""; Instance.new("UICorner", SB).CornerRadius = UDim.new(1, 0)
+    local Fill = Instance.new("Frame", SB); Fill.Size, Fill.BackgroundColor3 = UDim2.new((Config[Key] - Min) / (Max - Min), 0, 1, 0), Theme.Accent; Instance.new("UICorner", Fill).CornerRadius = UDim.new(1, 0); table.insert(AccentObjects, Fill)
+    local drag = false
+    local function Upd(i) local X = math.clamp((i.Position.X - SB.AbsolutePosition.X) / SB.AbsoluteSize.X, 0, 1); local V = math.floor(((Min + (Max - Min) * X) / Step) + 0.5) * Step; Config[Key] = V; Fill.Size = UDim2.new(X, 0, 1, 0); L.Text = Txt .. ": " .. V; if Key == "CameraFOV" then Camera.FieldOfView = V elseif Key == "ClockTime" then Lighting.ClockTime = V end end
+    SB.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = true; Upd(i) end end)
+    UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = false; SaveConfig() end end)
+    UserInputService.InputChanged:Connect(function(i) if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then Upd(i) end end)
+    AddCanvas(T_Name, 50)
+end
+
+local function CreateDropdown(T_Name, Txt, Key, Opts)
+    local F = Instance.new("TextButton", Tabs[T_Name].F); F.Size, F.BackgroundColor3, F.Text = UDim2.new(1, 0, 0, 40), Theme.BG, ""; Instance.new("UICorner", F).CornerRadius = UDim.new(0, 4)
+    local L = Instance.new("TextLabel", F); L.Size, L.Position, L.BackgroundTransparency, L.Text, L.TextColor3, L.Font, L.TextSize, L.TextXAlignment = UDim2.new(1, -110, 1, 0), UDim2.new(0, 10, 0, 0), 1, Txt, Theme.Text, Enum.Font.GothamSemibold, 12, Enum.TextXAlignment.Left
+    local VL = Instance.new("TextLabel", F); VL.Size, VL.Position, VL.BackgroundTransparency, VL.Text, VL.TextColor3, VL.Font, VL.TextSize, VL.TextXAlignment = UDim2.new(0, 100, 1, 0), UDim2.new(1, -110, 0, 0), 1, Config[Key], Theme.Accent, Enum.Font.GothamBold, 12, Enum.TextXAlignment.Right; table.insert(AccentObjects, VL)
+    local idx = 1; for i, v in ipairs(Opts) do if v == Config[Key] then idx = i break end end
+    F.MouseButton1Click:Connect(function() idx = idx + 1; if idx > #Opts then idx = 1 end; Config[Key] = Opts[idx]; VL.Text = Config[Key]; SaveConfig() end)
+    AddCanvas(T_Name, 40)
+end
+
+local function CreateButton(T_Name, Txt, Cb)
+    local F = Instance.new("TextButton", Tabs[T_Name].F); F.Size, F.BackgroundColor3, F.Text, F.TextColor3, F.Font, F.TextSize = UDim2.new(1, 0, 0, 38), Theme.BG, Txt, Theme.Text, Enum.Font.GothamBold, 12; Instance.new("UICorner", F).CornerRadius = UDim.new(0, 4)
+    F.MouseButton1Click:Connect(function() task.spawn(Cb) end); AddCanvas(T_Name, 38)
+end
+
+local function CreateLabel(T_Name, Txt, isTitle)
+    local F = Instance.new("TextLabel", Tabs[T_Name].F); F.Size, F.BackgroundTransparency, F.Text, F.TextColor3, F.Font, F.TextSize, F.TextXAlignment = UDim2.new(1, 0, 0, isTitle and 25 or 20), 1, Txt, isTitle and Theme.Accent or Theme.Text, isTitle and Enum.Font.GothamBlack or Enum.Font.GothamSemibold, isTitle and 14 or 12, Enum.TextXAlignment.Left
+    if isTitle then table.insert(AccentObjects, F) end; AddCanvas(T_Name, isTitle and 25 or 20)
+end
+
+-- TABS & CONTENT V58
+local TDash = CreateTab("Dashboard", "🏠", true)
+CreateLabel(TDash, "NOXERA V58 WARLORD", true)
+CreateLabel(TDash, "Founder: @_noxera. | Dev: palofsc")
+CreateLabel(TDash, "Status: Undetected (HUD & Widget Added)")
+CreateButton(TDash, "Copy Discord Link", function() if setclipboard then setclipboard(Config.DiscordLink) end end)
+
+local THUD = CreateTab("HUD & Widgets", "🖥️") -- NEW TAB V58
+CreateLabel(THUD, "Quick Aim Control", true)
+CreateToggle(THUD, "Hiển thị Nút Ngắm Nhanh (Quick Aim)", "ShowQuickBtn", function(s) QuickBtnFrame.Visible = s end)
+CreateToggle(THUD, "Khóa vị trí Nút Ngắm Nhanh", "LockQuickBtn")
+CreateLabel(THUD, "Target Information", true)
+CreateToggle(THUD, "Bật Bảng Thông Tin Mục Tiêu (Target HUD)", "TargetHUD", function(s) if not s then TargetHUD.Visible = false end end)
+
+local TAim = CreateTab("Combat", "🎯")
+CreateToggle(TAim, "Enable Aimbot", "AimEnabled")
+CreateToggle(TAim, "Omni Silent Aim", "SilentAim")
+CreateDropdown(TAim, "Aim Method", "AimMethod", {"Camera", "Mouse"})
+CreateDropdown(TAim, "Aim Part", "AimPart", {"Head", "Torso", "HumanoidRootPart"})
+CreateToggle(TAim, "Resolver V7 (Math Guard)", "Resolver")
+CreateToggle(TAim, "Auto Shoot", "AutoShoot")
+CreateDropdown(TAim, "Shoot Method", "ShootMethod", {"Mouse API", "VIM", "Tool"})
+CreateSlider(TAim, "Prediction Speed", "BulletSpeed", 100, 5000, 100)
+CreateSlider(TAim, "Aim Smoothness", "Smoothness", 1, 10, 0.5)
+
+local TSurv = CreateTab("Survival", "🛡️") 
+CreateLabel(TSurv, "Orbit & Anti-Aim System", true)
+CreateToggle(TSurv, "Target Strafe (Orbit)", "TargetStrafe")
+CreateSlider(TSurv, "Strafe Speed", "StrafeSpeed", 1, 20, 1)
+CreateSlider(TSurv, "Strafe Radius", "StrafeRadius", 5, 50, 1)
+CreateSlider(TSurv, "Strafe Height", "StrafeHeight", 0, 20, 1)
+CreateToggle(TSurv, "Velocity Anti-Aim", "AntiAim")
+
+local TVis = CreateTab("Visuals", "👁")
+CreateToggle(TVis, "ESP Box", "ESPBox")
+CreateToggle(TVis, "ESP Name & Dist", "ESPName")
+CreateToggle(TVis, "ESP Health Bar", "ESPHP")
+CreateToggle(TVis, "Skeleton ESP", "ESPSkeleton")
+CreateToggle(TVis, "OOF Arrows", "OOFArrows")
+CreateToggle(TVis, "Player Chams", "ESPChams")
+CreateDropdown(TVis, "Chams Material", "ChamsMaterial", {"ForceField", "Neon", "Plastic", "Glass"})
+CreateToggle(TVis, "Target Dot", "ShowTargetDot")
+CreateToggle(TVis, "Custom Crosshair", "CustomCrosshair")
+
+local TMisc = CreateTab("World/Misc", "🌍")
+CreateToggle(TMisc, "RGB Chroma Mode", "RGBMode")
+CreateToggle(TMisc, "Hit Sound", "HitSound")
+CreateToggle(TMisc, "Hit Marker", "HitMarker")
+CreateToggle(TMisc, "Hitbox Expander", "HitboxExpander")
+CreateSlider(TMisc, "Hitbox Size", "HitboxSize", 2, 50, 1)
+CreateToggle(TMisc, "Speed Hack", "SpeedHack")
+CreateSlider(TMisc, "Speed Value", "SpeedValue", 1, 10, 1)
+CreateSlider(TMisc, "Camera FOV", "CameraFOV", 30, 120, 1)
+CreateToggle(TMisc, "Low Detail (FPS Boost)", "LowDetail", function(s) if s then for _,v in pairs(Workspace:GetDescendants()) do if v:IsA("BasePart") then v.Material = Enum.Material.SmoothPlastic end end end end)
+CreateToggle(TMisc, "Fullbright", "Fullbright", function(s) Lighting.Ambient = s and Color3.new(1,1,1) or Color3.fromRGB(127,127,127); Lighting.GlobalShadows = not s end)
+
+local TSets = CreateTab("Settings", "⚙")
+CreateButton(TSets, "TẢI CẤU HÌNH (LOAD)", function() if LoadConfig() then print("Loaded") end end)
+CreateButton(TSets, "LƯU CẤU HÌNH (SAVE)", SaveConfig)
+CreateButton(TSets, "PANIC MODE (HỦY SCRIPT)", function()
+    for _, conn in ipairs(Connections) do conn:Disconnect() end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if _G.ESP_Cache and _G.ESP_Cache[p] then pcall(function() for _, v in pairs(_G.ESP_Cache[p].Lines or {}) do v:Remove() end; _G.ESP_Cache[p].OOF:Remove(); _G.ESP_Cache[p].Box:Remove(); _G.ESP_Cache[P].Name:Remove(); _G.ESP_Cache[P].HP:Remove(); _G.ESP_Cache[P].Tracer:Remove() end) end
+        if p.Character and p.Character:FindFirstChild("NoxChams") then p.Character.NoxChams:Destroy() end
+    end
+    pcall(function() _G.FOVCircle:Remove(); _G.TargetDot:Remove(); _G.CrossX:Remove(); _G.CrossY:Remove(); _G.HM_L1:Remove(); _G.HM_L2:Remove() end)
+    Gui:Destroy()
+end)
+
+--=============================================================================
+-- [CORE ENGINE V58 - ANTI-FREEZE MATH GUARD]
+--=============================================================================
+local function SafeDraw(T) local o=nil pcall(function() o=Drawing.new(T) end) return o or {Remove=function()end} end
+_G.ESP_Cache = {}
+_G.FOVCircle = SafeDraw("Circle"); pcall(function() _G.FOVCircle.Thickness=1; _G.FOVCircle.Filled=false end)
+_G.TargetDot = SafeDraw("Circle"); pcall(function() _G.TargetDot.Radius=4; _G.TargetDot.Filled=true; _G.TargetDot.Color=CURRENT_ACCENT end)
+_G.CrossX = SafeDraw("Line"); pcall(function() _G.CrossX.Thickness=1; _G.CrossX.Color=CURRENT_ACCENT end)
+_G.CrossY = SafeDraw("Line"); pcall(function() _G.CrossY.Thickness=1; _G.CrossY.Color=CURRENT_ACCENT end)
+_G.HM_L1 = SafeDraw("Line"); pcall(function() _G.HM_L1.Thickness=2; _G.HM_L1.Color=Color3.new(1,1,1) end)
+_G.HM_L2 = SafeDraw("Line"); pcall(function() _G.HM_L2.Thickness=2; _G.HM_L2.Color=Color3.new(1,1,1) end)
+
+local RayParams = RaycastParams.new(); RayParams.FilterType = Enum.RaycastFilterType.Exclude; RayParams.IgnoreWater = true
+local SkeleBones = {{"Head","UpperTorso"},{"UpperTorso","LowerTorso"},{"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},{"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},{"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},{"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"}}
+
+local function IsLocalAlive()
+    if not LocalPlayer or not LocalPlayer.Character then return false end
+    local Hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    return Hum and Hum.Health > 0 and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") ~= nil
+end
+
+local function TriggerHitFeedback()
+    if Config.HitSound then task.spawn(function() HitAudio:Play() end) end
+    if Config.HitMarker then HM_Alpha = 1 end
+end
+
+local function ExecuteShoot()
+    if not IsLocalAlive() or UserInputService:GetFocusedTextBox() then return end
+    if tick() - LastShootTick > Config.ShootDelay then
+        LastShootTick = tick(); TriggerHitFeedback()
+        task.spawn(function()
+            if Config.ShootMethod == "Tool" then local T = LocalPlayer.Character:FindFirstChildOfClass("Tool"); if T then T:Activate() end
+            elseif Config.ShootMethod == "Mouse API" and HasMouseMoverel then if mouse1click then mouse1click() elseif mouse1press then mouse1press() task.wait(0.01) mouse1release() end
+            elseif Config.ShootMethod == "VIM" then local c = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2); pcall(function() VIM:SendMouseButtonEvent(c.X, c.Y, 0, true, game, 1); task.wait(0.01); VIM:SendMouseButtonEvent(c.X, c.Y, 0, false, game, 1) end) end
+        end)
+    end
+end
+
+local function IsNaN(v) return v ~= v end
+local function SafeVec(v)
+    if not v or typeof(v) ~= "Vector3" then return Vector3.zero end
+    if IsNaN(v.X) or IsNaN(v.Y) or IsNaN(v.Z) then return Vector3.zero end
+    if math.abs(v.X) == math.huge or math.abs(v.Y) == math.huge or math.abs(v.Z) == math.huge then return Vector3.zero end
+    return v
+end
+
+local function IsValidTarget(P)
+    if P == LocalPlayer then return false end
+    local C = P.Character; if not C or not C:IsDescendantOf(Workspace) then return false end 
+    local H = C:FindFirstChildOfClass("Humanoid"); if not H or H.Health <= 0 then return false end
+    if Config.TeamCheck and LocalPlayer.Team and P.Team and LocalPlayer.Team == P.Team then return false end
+    if C:FindFirstChild("ForceField") then return false end
+    return true
+end
+
+local function GetAimPart(C) local p = C:FindFirstChild(Config.AimPart); return p or C:FindFirstChild("HumanoidRootPart") or C:FindFirstChild("Torso") end
+
+local function IsVisibleDeep(TPart)
+    local O = SafeVec(Camera.CFrame.Position); local D = SafeVec(TPart.Position - O)
+    RayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}; local R = Workspace:Raycast(O, D, RayParams)
+    if not R then return true end
+    if R.Instance:IsDescendantOf(TPart.Parent) then return true end
+    if R.Instance.Transparency > 0.5 or not R.Instance.CanCollide then return true end
+    return false
+end
+
+local function DrawOOFArrow(TPos, Obj, Col)
+    if not Obj or Obj.Visible == nil then return end
+    local OS = Camera.CFrame:PointToObjectSpace(SafeVec(TPos)); local Ang = math.atan2(OS.X, OS.Z)
+    if IsNaN(Ang) then return end 
+    local CX, CY = math.floor(Camera.ViewportSize.X/2), math.floor(Camera.ViewportSize.Y/2)
+    pcall(function()
+        Obj.PointA = Vector2.new(math.floor(CX + math.sin(Ang) * 150), math.floor(CY + math.cos(Ang) * 150))
+        Obj.PointB = Vector2.new(math.floor(CX + math.sin(Ang + 0.15) * 130), math.floor(CY + math.cos(Ang + 0.15) * 130))
+        Obj.PointC = Vector2.new(math.floor(CX + math.sin(Ang - 0.15) * 130), math.floor(CY + math.cos(Ang - 0.15) * 130))
+        Obj.Color = Col; Obj.Visible = true
+    end)
+end
+
+local TargetHistory = {}
+local function ResolverV7(TPart)
+    local V = TPart.Velocity; local P = SafeVec(TPart.Position); local T = tick()
+    if IsNaN(V.X) or V.Magnitude > 300 or math.abs(V.Y) > 100 then 
+        if not Config.Resolver then return Vector3.zero end
+        if TargetHistory[TPart] then local dt = T - TargetHistory[TPart].T; if dt > 0 then V = (P - TargetHistory[TPart].P) / dt end else V = Vector3.zero end
+    end
+    TargetHistory[TPart] = {P = P, T = T}
+    for k, v in pairs(TargetHistory) do if tick() - v.T > 1 then TargetHistory[k] = nil end end
+    return SafeVec(V)
+end
+
+local function GetOmniPrediction(TPart)
+    local P1 = SafeVec(TPart.Position); local P2 = SafeVec(Camera.CFrame.Position)
+    local D = (P1 - P2).Magnitude
+    local RV = ResolverV7(TPart); local P = 0; pcall(function() P = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000 end)
+    local TT = D / Config.BulletSpeed; local TD = (P + TT) * Config.Prediction
+    return SafeVec(P1 + (RV * TD) + Vector3.new(0, (Workspace.Gravity * Config.GravityDrop * (TT^2)) / 2, 0))
+end
+
+local function BezierInterpolate(t, p0, p1, p2) local u = 1 - t; return (u^2)*p0 + 2*u*t*p1 + (t^2)*p2 end
+
+local OldNamecall
+OldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local Method = getnamecallmethod(); local Args = {...}
+    if Config.SilentAim and SilentTarget and IsLocalAlive() then
+        if (Method == "FindPartOnRayWithIgnoreList" or Method == "FindPartOnRayWithWhitelist" or Method == "FindPartOnRay") and Args[1] then
+            Args[1] = Ray.new(SafeVec(Args[1].Origin), SafeVec((GetOmniPrediction(SilentTarget) - SafeVec(Args[1].Origin)).unit * 5000))
+            return OldNamecall(self, unpack(Args))
+        elseif Method == "Raycast" and Args[1] then
+            Args[2] = SafeVec((GetOmniPrediction(SilentTarget) - SafeVec(Args[1])).unit * 5000)
+            return OldNamecall(self, unpack(Args))
+        elseif Method == "FireServer" and typeof(Args[1]) == "Vector3" then
+            Args[1] = GetOmniPrediction(SilentTarget)
+            return OldNamecall(self, unpack(Args))
+        end
+    end
+    return OldNamecall(self, ...)
+end)
+
+table.insert(Connections, RunService.Heartbeat:Connect(function(dT)
+    if not IsLocalAlive() then return end
+    local C = LocalPlayer.Character; local H = C:FindFirstChildOfClass("Humanoid"); local RP = C:FindFirstChild("HumanoidRootPart")
+
+    if H and RP then
+        if Config.SpeedHack and H.MoveDirection.Magnitude > 0 then RP.CFrame = RP.CFrame + (SafeVec(H.MoveDirection) * Config.SpeedValue * dT * 10) end
+        
+        if Config.TargetStrafe and LockedTarget and LockedTarget.Parent then
+            local TRP = LockedTarget.Parent:FindFirstChild("HumanoidRootPart")
+            if TRP then
+                StrafeAngle = StrafeAngle + math.rad(Config.StrafeSpeed)
+                local Offset = Vector3.new(math.cos(StrafeAngle) * Config.StrafeRadius, Config.StrafeHeight, math.sin(StrafeAngle) * Config.StrafeRadius)
+                RP.CFrame = CFrame.new(SafeVec(TRP.Position + Offset), SafeVec(TRP.Position))
+            end
+        end
+
+        if Config.AntiAim then RP.Velocity = Vector3.new(math.random(-Config.AntiAimSpeed, Config.AntiAimSpeed), math.random(-50, 50), math.random(-Config.AntiAimSpeed, Config.AntiAimSpeed)) end
+    end
+    if Config.NoClip then for _, v in pairs(C:GetDescendants()) do if v:IsA("BasePart") and v.CanCollide then v.CanCollide = false end end end
+end))
+
+local CachedPlayers = Players:GetPlayers()
+table.insert(Connections, Players.PlayerAdded:Connect(function(p) table.insert(CachedPlayers, p) end))
+table.insert(Connections, Players.PlayerRemoving:Connect(function(p) for i, v in ipairs(CachedPlayers) do if v == p then table.remove(CachedPlayers, i) break end end end))
+
+table.insert(Connections, RunService.RenderStepped:Connect(function(dT)
+    Camera = Workspace.CurrentCamera; if not Camera then return end
+    local Center = Vector2.new(math.floor(Camera.ViewportSize.X / 2), math.floor(Camera.ViewportSize.Y / 2))
+    
+    local pulse = (math.sin(tick() * 4) + 1) / 2
+    if Config.RGBMode then
+        ChromaHue = (ChromaHue + dT * 0.25) % 1; CURRENT_ACCENT = Color3.fromHSV(ChromaHue, 1, 1)
+        for _, obj in pairs(AccentObjects) do pcall(function() if obj:IsA("UIStroke") or obj:IsA("TextLabel") then obj.Color = CURRENT_ACCENT else obj.BackgroundColor3 = CURRENT_ACCENT end end) end
+    else CURRENT_ACCENT = Theme.Accent end
+    
+    pcall(function()
+        if HM_Alpha > 0 then
+            HM_Alpha = math.clamp(HM_Alpha - (dT * 3), 0, 1)
+            _G.HM_L1.From = Center - Vector2.new(10, 10); _G.HM_L1.To = Center + Vector2.new(10, 10); _G.HM_L2.From = Center - Vector2.new(10, -10); _G.HM_L2.To = Center + Vector2.new(10, -10)
+            _G.HM_L1.Transparency = HM_Alpha; _G.HM_L2.Transparency = HM_Alpha; _G.HM_L1.Color = CURRENT_ACCENT; _G.HM_L2.Color = CURRENT_ACCENT; _G.HM_L1.Visible = true; _G.HM_L2.Visible = true
+        else _G.HM_L1.Visible = false; _G.HM_L2.Visible = false end
+    end)
+
+    if not IsLocalAlive() then LockedTarget = nil; SilentTarget = nil end
+    local cFOV = Config.AimFOV
+    if Config.DynamicFOV and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then cFOV = math.clamp(Config.AimFOV - (LocalPlayer.Character.HumanoidRootPart.Velocity.Magnitude * 1.5), 30, Config.AimFOV) end
+    if IsNaN(cFOV) then cFOV = Config.AimFOV end
+    
+    if Config.Watermark and _G.NoxeraWatermark then local ping = 0; pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) end); _G.NoxeraWatermark.Visible = true; _G.NoxeraWatermark.Text = " NOXERA V58 WARLORD | FPS: " .. math.floor(1 / dT) .. " | Ping: " .. ping .. "ms "
+    else pcall(function() _G.NoxeraWatermark.Visible = false end) end
+
+    pcall(function()
+        _G.FOVCircle.Position = Center; _G.FOVCircle.Radius = math.floor(cFOV); if (LockedTarget or SilentTarget) and Config.RGBMode then _G.FOVCircle.Radius = math.floor(cFOV + (pulse * 6)) end
+        _G.FOVCircle.Visible = Config.AimEnabled or Config.SilentAim; _G.FOVCircle.Color = (LockedTarget or SilentTarget) and CURRENT_ACCENT or Color3.fromRGB(255, 255, 255)
+        if Config.CustomCrosshair then _G.CrossX.Visible = true; _G.CrossY.Visible = true; _G.CrossX.From = Vector2.new(Center.X - 8, Center.Y); _G.CrossX.To = Vector2.new(Center.X + 8, Center.Y); _G.CrossY.From = Vector2.new(Center.X, Center.Y - 8); _G.CrossY.To = Vector2.new(Center.X, Center.Y + 8); _G.CrossX.Color = CURRENT_ACCENT; _G.CrossY.Color = CURRENT_ACCENT
+        else _G.CrossX.Visible = false; _G.CrossY.Visible = false end
+    end)
+
+    local CurrTarg = Config.SilentAim and SilentTarget or LockedTarget
+    if CurrTarg then
+        local P = Players:GetPlayerFromCharacter(CurrTarg.Parent)
+        if not P or not IsValidTarget(P) then 
+            if Config.SilentAim then SilentTarget = nil else LockedTarget = nil end
+        else
+            LastTargetHealth = CurrTarg.Parent.Humanoid.Health; local Pos, OS = Camera:WorldToViewportPoint(SafeVec(CurrTarg.Position))
+            if not OS or (Vector2.new(Pos.X, Pos.Y) - Center).Magnitude > (cFOV * 1.5) or (Config.WallCheck and not IsVisibleDeep(CurrTarg)) then if Config.SilentAim then SilentTarget = nil else LockedTarget = nil end end
+        end
+    end
+
+    local BScore = cFOV; local TBotTarget = nil
+
+    for _, P in ipairs(CachedPlayers) do
+        if not IsValidTarget(P) then
+            if _G.ESP_Cache[P] then pcall(function() for _, v in pairs(_G.ESP_Cache[P].Lines) do v.Visible = false end; _G.ESP_Cache[P].OOF.Visible = false; _G.ESP_Cache[P].Box.Visible = false; _G.ESP_Cache[P].Name.Visible = false; _G.ESP_Cache[P].HP.Visible = false end) end
+            if P.Character and P.Character:FindFirstChild("NoxChams") then P.Character.NoxChams:Destroy() end
+            continue
+        end
+
+        local C = P.Character; local HRP = C:FindFirstChild("HumanoidRootPart"); local Head = C:FindFirstChild("Head") or HRP; local Hum = C:FindFirstChildOfClass("Humanoid")
+        if Config.HitboxExpander and HRP then HRP.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize); HRP.Transparency = Config.HitboxTrans; HRP.CanCollide = false end
+        local eCol = ((LockedTarget and LockedTarget.Parent == C) or (SilentTarget and SilentTarget.Parent == C)) and CURRENT_ACCENT or Color3.fromRGB(255, 255, 255)
+
+        if Config.ESPChams then
+            local hl = C:FindFirstChild("NoxChams"); if not hl then hl = Instance.new("Highlight", C); hl.Name = "NoxChams"; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end
+            hl.FillColor = eCol; hl.FillTransparency = Config.RGBMode and (0.15 + (pulse * 0.4)) or 0.5; pcall(function() hl.Material = Enum.Material[Config.ChamsMaterial] end)
+        else if C:FindFirstChild("NoxChams") then C.NoxChams:Destroy() end end
+
+        local D3D = math.floor((SafeVec(Camera.CFrame.Position) - SafeVec(HRP.Position)).Magnitude)
+        if D3D > Config.MaxRender then continue end
+        local Pos, OS = Camera:WorldToViewportPoint(SafeVec(HRP.Position))
+
+        if not _G.ESP_Cache[P] then
+            _G.ESP_Cache[P] = { Box = SafeDraw("Square"), Name = SafeDraw("Text"), HP = SafeDraw("Square"), Lines = {}, OOF = SafeDraw("Triangle") }
+            pcall(function() local e = _G.ESP_Cache[P]; e.Box.Thickness=1; e.Box.Filled=false; e.Name.Size=13; e.Name.Center=true; e.Name.Outline=true; e.Name.Color=Color3.new(1,1,1); e.HP.Filled=true; e.OOF.Filled=true; e.OOF.Thickness=1 end)
+            for i = 1, #SkeleBones do local L = SafeDraw("Line"); pcall(function() L.Thickness = 1 end); table.insert(_G.ESP_Cache[P].Lines, L) end
+        end
+        local e = _G.ESP_Cache[P]
+
+        if not OS and Config.OOFArrows then DrawOOFArrow(HRP.Position, e.OOF, eCol) else pcall(function() e.OOF.Visible = false end) end
+
+        if OS then
+            pcall(function()
+                if Config.ESPBox or Config.ESPName or Config.ESPHP then
+                    local T, _ = Camera:WorldToViewportPoint(SafeVec(Head.Position + Vector3.new(0, 0.5, 0))); local B, _ = Camera:WorldToViewportPoint(SafeVec(HRP.Position - Vector3.new(0, 3, 0)))
+                    local BH = math.abs(T.Y - B.Y); local BW = BH * 0.55
+                    e.Box.Size = Vector2.new(math.floor(BW), math.floor(BH)); e.Box.Position = Vector2.new(math.floor(T.X - BW/2), math.floor(T.Y)); e.Box.Color = eCol; e.Box.Visible = Config.ESPBox
+                    e.Name.Text = P.Name .. " ["..D3D.."m]"; e.Name.Position = Vector2.new(math.floor(T.X), math.floor(T.Y - 15)); e.Name.Visible = Config.ESPName
+                    local Pct = Hum.Health/Hum.MaxHealth; e.HP.Size = Vector2.new(2, math.floor(BH * Pct)); e.HP.Position = Vector2.new(math.floor(T.X - BW/2 - 5), math.floor(B.Y - e.HP.Size.Y)); e.HP.Color = Color3.fromRGB(255 - (Pct * 255), Pct * 255, 0); e.HP.Visible = Config.ESPHP
+                else e.Box.Visible = false; e.Name.Visible = false; e.HP.Visible = false end
+                
+                if Config.ESPSkeleton and Hum.RigType == Enum.HumanoidRigType.R15 then
+                    for i, v in ipairs(SkeleBones) do
+                        local P1 = C:FindFirstChild(v[1]); local P2 = C:FindFirstChild(v[2])
+                        if P1 and P2 then
+                            local P1V, V1 = Camera:WorldToViewportPoint(SafeVec(P1.Position)); local P2V, V2 = Camera:WorldToViewportPoint(SafeVec(P2.Position))
+                            if V1 or V2 then e.Lines[i].From = Vector2.new(math.floor(P1V.X), math.floor(P1V.Y)); e.Lines[i].To = Vector2.new(math.floor(P2V.X), math.floor(P2V.Y)); e.Lines[i].Color = eCol; e.Lines[i].Visible = true else e.Lines[i].Visible = false end
+                        else e.Lines[i].Visible = false end
+                    end
+                else for _, l in pairs(e.Lines) do l.Visible = false end end
+            end)
+        else pcall(function() e.Box.Visible = false; e.Name.Visible = false; e.HP.Visible = false; for _, l in pairs(e.Lines) do l.Visible = false end end) end
+
+        local AP = GetAimPart(C)
+        if AP and OS then
+            local APos = Camera:WorldToViewportPoint(SafeVec(AP.Position)); local D2D = (Vector2.new(APos.X, APos.Y) - Center).Magnitude
+            if Config.TriggerBot and D2D <= 15 and (not Config.WallCheck or IsVisibleDeep(AP)) then TBotTarget = AP end
+            if (Config.AimEnabled or Config.SilentAim) and D2D < BScore and (not Config.WallCheck or IsVisibleDeep(AP)) then
+                BScore = D2D; if Config.SilentAim then SilentTarget = AP else LockedTarget = AP end; LastTargetHealth = Hum.Health
+            end
+        end
+    end
+
+    if Config.TriggerBot and TBotTarget then ExecuteShoot() end
+
+    -- V58: XỬ LÝ HIỂN THỊ TARGET HUD
+    if Config.TargetHUD then
+        local ActiveTarget = Config.SilentAim and SilentTarget or LockedTarget
+        if ActiveTarget and ActiveTarget.Parent then
+            local TPlayer = Players:GetPlayerFromCharacter(ActiveTarget.Parent)
+            if TPlayer then
+                TargetHUD.Visible = true
+                HUD_Name.Text = "Target: " .. TPlayer.Name
+                local Dist = math.floor((SafeVec(Camera.CFrame.Position) - SafeVec(ActiveTarget.Position)).Magnitude)
+                HUD_HP.Text = "HP: " .. math.floor(LastTargetHealth) .. " | Dist: " .. Dist .. "m"
+            end
+        else
+            TargetHUD.Visible = false
+        end
+    else
+        TargetHUD.Visible = false
+    end
+
+    if Config.AimEnabled and LockedTarget and IsLocalAlive() then
+        local PPos = GetOmniPrediction(LockedTarget)
+        if Config.AimMethod == "Mouse" and HasMouseMoverel then
+            local TPos, OS = Camera:WorldToViewportPoint(PPos)
+            if OS then
+                local dX = TPos.X - Center.X; local dY = TPos.Y - Center.Y
+                if Config.AimMode == "Rage" then mousemoverel(dX, dY)
+                elseif Config.AimMode == "Bezier" then local ro = Vector2.new(math.random(-40,40), math.random(-40,40)); local bCurve = BezierInterpolate(dT * Config.Smoothness, Vector2.new(0,0), ro, Vector2.new(dX, dY)); mousemoverel(math.floor(bCurve.X), math.floor(bCurve.Y))
+                else local sm = math.clamp(Config.Smoothness / 10, 0.05, 1); mousemoverel(math.floor(dX * sm), math.floor(dY * sm)) end
+            end
+        else
+            local TCFrame = CFrame.lookAt(Camera.CFrame.Position, PPos)
+            if Config.AimMode == "Rage" then Camera.CFrame = TCFrame else Camera.CFrame = Camera.CFrame:Lerp(TCFrame, math.clamp(dT * (Config.Smoothness * 1.5), 0, 1)) end
+        end
+
+        if Config.ShowTargetDot then local dp, ds = Camera:WorldToViewportPoint(PPos); pcall(function() if ds then _G.TargetDot.Position = Vector2.new(math.floor(dp.X), math.floor(dp.Y)); _G.TargetDot.Visible = true else _G.TargetDot.Visible = false end end) else pcall(function() _G.TargetDot.Visible = false end) end
+        if Config.AutoShoot and not Config.TriggerBot and (not Config.WallCheck or IsVisibleDeep(LockedTarget)) then ExecuteShoot() end
+    else pcall(function() _G.TargetDot.Visible = false end) end
+end))
+
+table.insert(Connections, Players.PlayerRemoving:Connect(function(P)
+    if _G.ESP_Cache and _G.ESP_Cache[P] then pcall(function() for _, v in pairs(_G.ESP_Cache[P].Lines or {}) do v:Remove() end; _G.ESP_Cache[P].OOF:Remove(); _G.ESP_Cache[P].Box:Remove(); _G.ESP_Cache[P].Name:Remove(); _G.ESP_Cache[P].HP:Remove() end); _G.ESP_Cache[P] = nil end
+end))
