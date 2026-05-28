@@ -1,0 +1,322 @@
+// Bản cập nhật V11.0: Tái cấu trúc Mạng nơ-ron Giả lập Âm sắc (Formant & Pitch Envelope)
+// 1. Loại bỏ nhiễu kim loại (Metallic Artifacts) trong chế độ giọng trầm.
+// 2. Tích hợp bộ lọc EQ tham số (Parametric EQ) để mô phỏng cộng hưởng vòm họng sâu (Đặc tuyến tần số giọng trầm uy lực).
+// 3. Tối ưu hóa màng lọc thông dải (Bandpass) cho chế độ Baby để đạt độ thanh mảnh, rõ ràng, không bị chói.
+// Khuyến cáo kỹ thuật: Web Audio API điều chỉnh âm sắc (Timbre) và cao độ giả lập, không thay đổi phương ngữ (Phonetics) người dùng.
+
+(function() {
+    'use strict';
+
+    // 1. Cấu trúc Lõi Hệ Thống V11
+    const cauHinh = {
+        kichHoat: false,
+        hienThiUI: true,
+        cheDoGiong: "mac_dinh", 
+        khuechDaiDauVao: 4.0,
+        nguongCatOn: -40,
+        tiengVang: 0,
+        viTriAm: 0,
+        amLuongTong: 6.0
+    };
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext || window.mozAudioContext || window.msAudioContext;
+    if (!AudioContext) return;
+    const audioCtx = new AudioContext();
+
+    const moKhoaTapTrung = () => { if (audioCtx.state === 'suspended') audioCtx.resume(); };
+    ['touchstart', 'touchend', 'click', 'keydown'].forEach(suKien => {
+        document.addEventListener(suKien, moKhoaTapTrung, { once: true, capture: true });
+    });
+
+    // Khai báo con trỏ Node
+    let nutDauVao, nutDauRa, luongXuLy, luongBoQua;
+    let locTanSoThap, congCatOn, machGioiHan;
+    let eqTram, eqTrung, eqCao, daoDongVong, khuechDaiVong, treNhai, daoDongNhai, khuechDaiNhai, khuechDaiGiongGoc;
+    let machVangTre, machVangPhanHoi, nutVangRa, dieuHuongVom;
+
+    // 2. Giao diện Điều khiển V11
+    const bangDieuKhien = document.createElement('div');
+    bangDieuKhien.id = "palofsc-v11-panel";
+    bangDieuKhien.style.cssText = "position: fixed; top: 2vh; left: 2vw; z-index: 2147483647; font-family: monospace; width: 90vw; max-width: 360px; user-select: none; touch-action: none;";
+
+    const thanhTieuDe = document.createElement('div');
+    thanhTieuDe.innerText = "≡ ENGINE V11: FORMANT SHIFT ≡";
+    thanhTieuDe.style.cssText = "background: #000; color: #00ffcc; border: 1px solid #00ffcc; padding: 12px; cursor: move; border-radius: 6px 6px 0 0; font-weight: bold; text-align: center; font-size: 14px;";
+    
+    const nutAnHien = document.createElement('button');
+    nutAnHien.innerText = "BẬT/TẮT GIAO DIỆN";
+    nutAnHien.style.cssText = "background: #111; color: #00ffcc; border: 1px solid #00ffcc; border-top: none; padding: 8px; cursor: pointer; width: 100%; text-align: center; font-size: 12px; font-weight: bold;";
+
+    const giaoDienChinh = document.createElement('div');
+    giaoDienChinh.style.cssText = "background: rgba(0, 15, 20, 0.98); color: #00ffcc; border: 2px solid #00ffcc; border-top: none; padding: 15px; border-radius: 0 0 6px 6px; box-shadow: 0px 8px 25px rgba(0, 255, 204, 0.4); display: block;";
+    
+    giaoDienChinh.innerHTML = `
+        <div style="display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid #00ffcc; padding-bottom: 5px;">
+            <span style="font-weight: bold;">TRẠNG THÁI: <span id="ui-trangthai" style="color: #666;">CHỜ LỆNH</span></span>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+            <label>Phân Tích Tần Số (Voice Mod):</label>
+            <select id="tuychon-giong" style="width: 100%; margin-top: 5px; background: #000; color: #00ffcc; border: 1px solid #00ffcc; padding: 8px; font-weight: bold; outline: none; border-radius: 4px;">
+                <option value="mac_dinh">Nguyên Bản (Tối ưu độ nét)</option>
+                <option value="tram_uy_luc">Trầm Uy Lực (Mô phỏng cộng hưởng sâu)</option>
+                <option value="tre_em">Nhi Đồng / Baby (Thanh mỏng, rõ)</option>
+                <option value="ac_quy">Ác Quỷ (Distortion + RingMod)</option>
+                <option value="cyborg">Cyborg (Sóng kim loại)</option>
+            </select>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+            <label>Noise Gate (Khử ồn): <span id="ui-caton">${cauHinh.nguongCatOn}</span> dB</label>
+            <input type="range" id="tuychon-caton" min="-80" max="-10" step="1" value="${cauHinh.nguongCatOn}" style="width: 100%; accent-color: #00ffcc; margin-top: 5px;">
+        </div>
+
+        <div style="margin-bottom: 12px;">
+            <label>Reverb (Vang 3D): <span id="ui-vang">${cauHinh.tiengVang}</span>%</label>
+            <input type="range" id="tuychon-vang" min="0" max="100" step="1" value="${cauHinh.tiengVang}" style="width: 100%; accent-color: #00ffcc; margin-top: 5px;">
+        </div>
+
+        <div style="margin-bottom: 12px;">
+            <label>Pre-Amp (Độ nhạy): <span id="ui-dauvao">${cauHinh.khuechDaiDauVao}</span>x</label>
+            <input type="range" id="tuychon-dauvao" min="1" max="15" step="0.5" value="${cauHinh.khuechDaiDauVao}" style="width: 100%; accent-color: #00ffcc; margin-top: 5px;">
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            <label>Master Limiter (Chống rè): <span id="ui-tong">${cauHinh.amLuongTong}</span>x</label>
+            <input type="range" id="tuychon-tong" min="1" max="25" step="0.5" value="${cauHinh.amLuongTong}" style="width: 100%; accent-color: #fff; margin-top: 5px;">
+        </div>
+
+        <button id="nut-kichhoat" style="width: 100%; padding: 14px; background: #00ffcc; color: #000; font-weight: bold; font-size: 16px; border: none; border-radius: 4px; cursor: pointer;">KÍCH HOẠT HỆ THỐNG</button>
+    `;
+
+    bangDieuKhien.appendChild(thanhTieuDe);
+    bangDieuKhien.appendChild(nutAnHien);
+    bangDieuKhien.appendChild(giaoDienChinh);
+    document.body.appendChild(bangDieuKhien);
+
+    // 3. Cơ chế Kéo Thả (Drag & Drop)
+    let dangKeo = false, viTriX = 0, viTriY = 0;
+
+    const xuLyBatDauKeo = (e) => {
+        dangKeo = true;
+        const suKien = e.touches ? e.touches[0] : e;
+        viTriX = suKien.clientX - bangDieuKhien.getBoundingClientRect().left;
+        viTriY = suKien.clientY - bangDieuKhien.getBoundingClientRect().top;
+    };
+
+    const xuLyThucHienKeo = (e) => {
+        if (!dangKeo) return;
+        e.preventDefault();
+        const suKien = e.touches ? e.touches[0] : e;
+        bangDieuKhien.style.left = (suKien.clientX - viTriX) + "px";
+        bangDieuKhien.style.top = (suKien.clientY - viTriY) + "px";
+    };
+
+    const xuLyKetThucKeo = () => { dangKeo = false; };
+
+    thanhTieuDe.addEventListener('mousedown', xuLyBatDauKeo);
+    document.addEventListener('mousemove', xuLyThucHienKeo, {passive: false});
+    document.addEventListener('mouseup', xuLyKetThucKeo);
+    thanhTieuDe.addEventListener('touchstart', xuLyBatDauKeo, {passive: false});
+    document.addEventListener('touchmove', xuLyThucHienKeo, {passive: false});
+    document.addEventListener('touchend', xuLyKetThucKeo);
+
+    // 4. Logic Biến Đổi Âm Thanh (Định tuyến Parametric EQ)
+    nutAnHien.addEventListener('click', () => {
+        cauHinh.hienThiUI = !cauHinh.hienThiUI;
+        giaoDienChinh.style.display = cauHinh.hienThiUI ? "block" : "none";
+    });
+
+    const capNhatDongCo = () => {
+        if (nutDauVao) nutDauVao.gain.setTargetAtTime(cauHinh.khuechDaiDauVao, audioCtx.currentTime, 0.05);
+        if (nutDauRa) nutDauRa.gain.setTargetAtTime(cauHinh.amLuongTong, audioCtx.currentTime, 0.05);
+        if (congCatOn) congCatOn.threshold.setTargetAtTime(cauHinh.nguongCatOn, audioCtx.currentTime, 0.05);
+        if (nutVangRa) nutVangRa.gain.setTargetAtTime(cauHinh.tiengVang / 100, audioCtx.currentTime, 0.05);
+
+        if (!eqTram || !eqTrung || !eqCao) return;
+
+        // Reset Trạng Thái Mặc Định (Bypass Filters)
+        eqTram.gain.value = 0; eqTrung.gain.value = 0; eqCao.gain.value = 0;
+        khuechDaiVong.gain.value = 0; khuechDaiNhai.gain.value = 0; khuechDaiGiongGoc.gain.value = 1.0;
+
+        switch (cauHinh.cheDoGiong) {
+            case "tram_uy_luc":
+                // Tái tạo cộng hưởng lồng ngực và vòm họng
+                eqTram.type = "lowshelf"; eqTram.frequency.value = 150; eqTram.gain.value = 12; // Boost cực mạnh dải Bass
+                eqTrung.type = "peaking"; eqTrung.frequency.value = 2500; eqTrung.Q.value = 1.5; eqTrung.gain.value = 6; // Giữ độ sắc nét của phụ âm
+                eqCao.type = "highshelf"; eqCao.frequency.value = 6000; eqCao.gain.value = -5; // Giảm chói
+                
+                // Sử dụng Delay siêu ngắn (Chorus) để làm dày giọng, không dùng RingMod gây méo tiếng
+                treNhai.delayTime.value = 0.015;
+                daoDongNhai.frequency.value = 2; // Rung chậm tạo chiều sâu
+                khuechDaiNhai.gain.value = 0.4;
+                khuechDaiGiongGoc.gain.value = 0.9;
+                break;
+            
+            case "tre_em":
+                // Tái tạo thanh quản ngắn, tần số cao
+                eqTram.type = "highpass"; eqTram.frequency.value = 700; // Cắt toàn bộ dải trầm người lớn
+                eqTrung.type = "peaking"; eqTrung.frequency.value = 3500; eqTrung.Q.value = 1.0; eqTrung.gain.value = 10;
+                eqCao.type = "highshelf"; eqCao.frequency.value = 8000; eqCao.gain.value = 5;
+                
+                // Vibrato thanh
+                treNhai.delayTime.value = 0.005;
+                daoDongNhai.frequency.value = 8;
+                khuechDaiNhai.gain.value = 0.6;
+                khuechDaiGiongGoc.gain.value = 1.0;
+                break;
+                
+            case "ac_quy":
+                // Biến dạng tần số thấp, âm ti
+                eqTram.type = "lowpass"; eqTram.frequency.value = 600;
+                daoDongVong.frequency.value = 45; // Điều chế biên độ dải thấp
+                khuechDaiVong.gain.value = 0.8;
+                khuechDaiGiongGoc.gain.value = 0.2;
+                break;
+                
+            case "cyborg":
+                eqTrung.type = "peaking"; eqTrung.frequency.value = 2000; eqTrung.gain.value = 10;
+                daoDongVong.frequency.value = 160;
+                khuechDaiVong.gain.value = 0.7;
+                khuechDaiGiongGoc.gain.value = 0.5;
+                break;
+        }
+    };
+
+    document.getElementById('tuychon-giong').addEventListener('change', (e) => { cauHinh.cheDoGiong = e.target.value; capNhatDongCo(); });
+
+    const ganSuKienChuyenDong = (idTruot, khoaCauHinh, idHienThi, laSoThuc = false) => {
+        document.getElementById(idTruot).addEventListener('input', (e) => {
+            cauHinh[khoaCauHinh] = laSoThuc ? parseFloat(e.target.value) : parseInt(e.target.value);
+            document.getElementById(idHienThi).innerText = cauHinh[khoaCauHinh];
+            capNhatDongCo();
+        });
+    };
+
+    ganSuKienChuyenDong('tuychon-caton', 'nguongCatOn', 'ui-caton', false);
+    ganSuKienChuyenDong('tuychon-vang', 'tiengVang', 'ui-vang', false);
+    ganSuKienChuyenDong('tuychon-dauvao', 'khuechDaiDauVao', 'ui-dauvao', true);
+    ganSuKienChuyenDong('tuychon-tong', 'amLuongTong', 'ui-tong', true);
+
+    const txtTrangThai = document.getElementById('ui-trangthai');
+    const nutKichHoat = document.getElementById('nut-kichhoat');
+
+    nutKichHoat.addEventListener('click', () => {
+        cauHinh.kichHoat = !cauHinh.kichHoat;
+        moKhoaTapTrung();
+        if (cauHinh.kichHoat) {
+            txtTrangThai.innerText = "ACTIVE";
+            txtTrangThai.style.color = "#000"; txtTrangThai.style.background = "#00ffcc";
+            nutKichHoat.innerText = "TẮT HỆ THỐNG";
+            nutKichHoat.style.background = "#ff0000"; nutKichHoat.style.color = "#fff";
+        } else {
+            txtTrangThai.innerText = "CHỜ LỆNH";
+            txtTrangThai.style.color = "#666"; txtTrangThai.style.background = "transparent";
+            nutKichHoat.innerText = "KÍCH HOẠT HỆ THỐNG";
+            nutKichHoat.style.background = "#00ffcc"; nutKichHoat.style.color = "#000";
+        }
+    });
+
+    // 5. Cấp phát đồ thị âm thanh (Web Audio API Graph)
+    const hamGetUserMediaGoc = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    
+    navigator.mediaDevices.getUserMedia = async (rangBuoc) => {
+        if (rangBuoc && rangBuoc.audio) {
+            rangBuoc.audio = { 
+                echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+                googEchoCancellation: false, googAutoGainControl: false, googNoiseSuppression: false,
+                sampleRate: { ideal: 48000 }, channelCount: { ideal: 2 }
+            };
+        }
+
+        const luongDuLieu = await hamGetUserMediaGoc(rangBuoc);
+        
+        if (luongDuLieu.getAudioTracks().length > 0) {
+            const nguonPhat = audioCtx.createMediaStreamSource(luongDuLieu);
+            const dichDen = audioCtx.createMediaStreamDestination();
+            dichDen.channelCount = 2;
+
+            // Khối Lọc Căn Bản
+            locTanSoThap = audioCtx.createBiquadFilter(); locTanSoThap.type = 'highpass'; locTanSoThap.frequency.value = 65;
+            congCatOn = audioCtx.createDynamicsCompressor();
+            congCatOn.threshold.value = cauHinh.nguongCatOn;
+            congCatOn.knee.value = 40; congCatOn.ratio.value = 16;
+            congCatOn.attack.value = 0.005; congCatOn.release.value = 0.15;
+            nutDauVao = audioCtx.createGain();
+
+            // Cụm Parametric EQ (Điều chỉnh Formant)
+            eqTram = audioCtx.createBiquadFilter(); eqTram.type = 'lowshelf'; eqTram.frequency.value = 150;
+            eqTrung = audioCtx.createBiquadFilter(); eqTrung.type = 'peaking'; eqTrung.frequency.value = 2500;
+            eqCao = audioCtx.createBiquadFilter(); eqCao.type = 'highshelf'; eqCao.frequency.value = 6000;
+
+            // Khối Biến Âm Đặc Biệt
+            khuechDaiGiongGoc = audioCtx.createGain();
+            
+            daoDongVong = audioCtx.createOscillator(); daoDongVong.type = 'sine'; daoDongVong.start();
+            khuechDaiVong = audioCtx.createGain();
+
+            treNhai = audioCtx.createDelay(1.0);
+            daoDongNhai = audioCtx.createOscillator(); daoDongNhai.type = 'sine'; daoDongNhai.start();
+            const lfoNhai = audioCtx.createGain(); lfoNhai.gain.value = 0.004;
+            daoDongNhai.connect(lfoNhai); lfoNhai.connect(treNhai.delayTime);
+            khuechDaiNhai = audioCtx.createGain();
+            const diemGomGiong = audioCtx.createGain();
+
+            // Khối Tiếng Vang (Reverb)
+            machVangTre = audioCtx.createDelay(2.0); machVangTre.delayTime.value = 0.2;
+            machVangPhanHoi = audioCtx.createGain(); machVangPhanHoi.gain.value = 0.65;
+            nutVangRa = audioCtx.createGain();
+            
+            // Khối Master Output (Limiter chống rè)
+            nutDauRa = audioCtx.createGain();
+            machGioiHan = audioCtx.createDynamicsCompressor();
+            machGioiHan.threshold.value = -1.0; 
+            machGioiHan.ratio.value = 20; 
+            machGioiHan.attack.value = 0.001; 
+            machGioiHan.release.value = 0.05;
+
+            luongXuLy = audioCtx.createGain();
+            luongBoQua = audioCtx.createGain();
+
+            capNhatDongCo();
+
+            // ĐỊNH TUYẾN MẠCH (Routing)
+            nguonPhat.connect(locTanSoThap).connect(congCatOn).connect(nutDauVao);
+            
+            // Chạy qua 3 bộ lọc tần số
+            nutDauVao.connect(eqTram).connect(eqTrung).connect(eqCao);
+            
+            // Tách luồng điều chế
+            eqCao.connect(khuechDaiGiongGoc).connect(diemGomGiong);
+            eqCao.connect(khuechDaiVong).connect(diemGomGiong);
+            daoDongVong.connect(khuechDaiVong.gain);
+            eqCao.connect(treNhai).connect(khuechDaiNhai).connect(diemGomGiong);
+
+            // Tách luồng tiếng vang
+            diemGomGiong.connect(nutDauRa); // Luồng chính
+            diemGomGiong.connect(machVangTre).connect(machVangPhanHoi).connect(machVangTre).connect(nutVangRa).connect(nutDauRa); // Luồng phụ
+
+            // Xuất tín hiệu
+            nutDauRa.connect(machGioiHan).connect(luongXuLy).connect(dichDen);
+            
+            // Mạch gốc
+            nguonPhat.connect(luongBoQua).connect(dichDen);
+
+            // Poller bảo vệ tín hiệu
+            setInterval(() => {
+                const hienTai = audioCtx.currentTime;
+                if (cauHinh.kichHoat) {
+                    luongXuLy.gain.setTargetAtTime(1, hienTai, 0.02);
+                    luongBoQua.gain.setTargetAtTime(0, hienTai, 0.02);
+                } else {
+                    luongXuLy.gain.setTargetAtTime(0, hienTai, 0.02);
+                    luongBoQua.gain.setTargetAtTime(1, hienTai, 0.02);
+                }
+            }, 50);
+
+            const trackMoi = [...dichDen.stream.getAudioTracks(), ...luongDuLieu.getVideoTracks()];
+            return new MediaStream(trackMoi);
+        }
+        
+        return luongDuLieu;
+    };
