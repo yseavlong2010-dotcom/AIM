@@ -1,281 +1,184 @@
 -- =======================================================
--- AUTO PAINT V3 - YSL PREMIUM EDITION (OPTIMIZED FOR MOBILE)
--- Hỗ trợ vẽ 2D Canvas & Tường 3D (Spray Paint)
+-- AUTO PAINT V5 - FLOOR CANVAS EXPERT (YSL EDITION)
+-- Giải pháp tối thượng cho Map có Bảng vẽ nằm dưới mặt đất
 -- =======================================================
 
 local CoreGui = game:GetService("CoreGui")
-local HttpService = game:GetService("HttpService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- Xóa bản cũ nếu có
-if CoreGui:FindFirstChild("YSL_AutoPaint") then CoreGui.YSL_AutoPaint:Destroy() end
+if CoreGui:FindFirstChild("YSL_AutoPaint_v5") then 
+    CoreGui.YSL_AutoPaint_v5:Destroy() 
+end
 
--- Trạng thái hệ thống
 local State = {
-    IsOpen = true,
     IsDrawing = false,
-    Mode = "2D", -- "2D" hoặc "3D_Spray"
-    TargetWall = nil, -- Dùng cho map bình xịt 3D
-    DrawDelay = 0.03,
-    Watermark = "YSL - Premium Script v3"
+    Pos1 = nil, -- Tọa độ chân góc Trái-Trên
+    Pos2 = nil, -- Tọa độ chân góc Phải-Dưới
+    DrawDelay = 0.03
 }
 
 -- ==========================================
--- 1. KHỞI TẠO HỆ THỐNG GIAO DIỆN (UI)
+-- 1. GIAO DIỆN (UI) TỐI ƯU CHO TÁC VỤ DI CHUYỂN
 -- ==========================================
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "YSL_AutoPaint"
-ScreenGui.Parent = CoreGui
+local ScreenGui = Instance.new("ScreenGui", CoreGui)
+ScreenGui.Name = "YSL_AutoPaint_v5"
 
--- NÚT ĐÓNG/MỞ CỐ ĐỊNH (Góc màn hình ngang)
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(0, 45, 0, 45)
-ToggleBtn.Position = UDim2.new(0, 10, 0, 10)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-ToggleBtn.Text = "🎨"
-ToggleBtn.TextSize = 20
-ToggleBtn.Parent = ScreenGui
-local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 8)
-ToggleCorner.Parent = ToggleBtn
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 320, 0, 280)
+MainFrame.Position = UDim2.new(0.5, -160, 0.5, -140)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+MainFrame.Draggable = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
 
--- KHUNG MENU CHÍNH (Thiết kế thanh bên trái tối ưu màn hình ngang)
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 280, 0, 320)
-MainFrame.Position = UDim2.new(0, 65, 0, 10) -- Nằm cạnh nút Toggle
-MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true -- Cho phép kéo nếu muốn thay đổi vị trí
-MainFrame.Parent = ScreenGui
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Size = UDim2.new(1, 0, 0, 35)
+Title.Text = "⚡ YSL FLOOR PAINT v5 ⚡"
+Title.TextColor3 = Color3.fromRGB(0, 255, 150)
+Title.Font = Enum.Font.GothamBold
+Title.BackgroundTransparency = 1
 
-local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 12)
-MainCorner.Parent = MainFrame
+local Instruction = Instance.new("TextLabel", MainFrame)
+Instruction.Size = UDim2.new(0.9, 0, 0, 40)
+Instruction.Position = UDim2.new(0.05, 0, 0.15, 0)
+Instruction.Text = "Hướng dẫn: Di chuyển nhân vật đến 2 góc của bảng vẽ dưới đất và bấm nút Set."
+Instruction.TextColor3 = Color3.fromRGB(200, 200, 200)
+Instruction.TextWrapped = true
+Instruction.BackgroundTransparency = 1
 
--- Thanh viền trang trí hiệu ứng RGB/Cyan cao cấp
-local LineTop = Instance.new("Frame")
-LineTop.Size = UDim2.new(1, 0, 0, 3)
-LineTop.BackgroundColor3 = Color3.fromRGB(0, 255, 200)
-LineTop.BorderSizePixel = 0
-LineTop.Parent = MainFrame
+-- NÚT ĐO ĐẠC BẰNG CHÂN (WALK-TO-SET)
+local BtnPos1 = Instance.new("TextButton", MainFrame)
+BtnPos1.Size = UDim2.new(0.42, 0, 0, 40)
+BtnPos1.Position = UDim2.new(0.05, 0, 0.35, 0)
+BtnPos1.Text = "📍 Đứng đây & Set Góc 1"
+BtnPos1.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+BtnPos1.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", BtnPos1).CornerRadius = UDim.new(0, 6)
 
--- TEXT INFO "YSL" THEO YÊU CẦU CỦA CẤP TRÊN
-local YSL_Logo = Instance.new("TextLabel")
-YSL_Logo.Size = UDim2.new(1, 0, 0, 35)
-YSL_Logo.Position = UDim2.new(0, 0, 0, 5)
-YSL_Logo.BackgroundTransparency = 1
-YSL_Logo.Text = "⚡ YSL AUTOMATION ⚡"
-YSL_Logo.TextColor3 = Color3.fromRGB(255, 215, 0) -- Màu vàng Gold sang trọng
-YSL_Logo.Font = Enum.Font.GothamBold
-YSL_Logo.TextSize = 16
-YSL_Logo.Parent = MainFrame
+local BtnPos2 = Instance.new("TextButton", MainFrame)
+BtnPos2.Size = UDim2.new(0.42, 0, 0, 40)
+BtnPos2.Position = UDim2.new(0.53, 0, 0.35, 0)
+BtnPos2.Text = "📍 Đứng đây & Set Góc 2"
+BtnPos2.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+BtnPos2.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", BtnPos2).CornerRadius = UDim.new(0, 6)
 
--- Ô nhập Link ảnh
-local LinkBox = Instance.new("TextBox")
-LinkBox.Size = UDim2.new(0.9, 0, 0, 35)
-LinkBox.Position = UDim2.new(0.05, 0, 0.15, 0)
-LinkBox.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-LinkBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-LinkBox.PlaceholderText = "Nhập URL JSON dữ liệu ảnh..."
-LinkBox.TextSize = 12
-LinkBox.Parent = MainFrame
-Instance.new("UICorner").Parent = LinkBox
+local ActionBtn = Instance.new("TextButton", MainFrame)
+ActionBtn.Size = UDim2.new(0.9, 0, 0, 45)
+ActionBtn.Position = UDim2.new(0.05, 0, 0.55, 0)
+ActionBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+ActionBtn.Text = "▶ BẮT ĐẦU VẼ XUỐNG ĐẤT"
+ActionBtn.TextColor3 = Color3.new(1,1,1)
+ActionBtn.Font = Enum.Font.GothamBold
+Instance.new("UICorner", ActionBtn).CornerRadius = UDim.new(0, 8)
 
--- Nút chuyển đổi chế độ (2D Canvas <-> 3D Spray Paint)
-local ModeBtn = Instance.new("TextButton")
-ModeBtn.Size = UDim2.new(0.9, 0, 0, 35)
-ModeBtn.Position = UDim2.new(0.05, 0, 0.3, 0)
-ModeBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-ModeBtn.Text = "Chế độ: Vẽ 2D (Bình thường)"
-ModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ModeBtn.Font = Enum.Font.Gotham
-ModeBtn.Parent = MainFrame
-Instance.new("UICorner").Parent = ModeBtn
-
--- Nút chọn Tường 3D (Dành riêng cho map Bình xịt màu)
-local SelectWallBtn = Instance.new("TextButton")
-SelectWallBtn.Size = UDim2.new(0.9, 0, 0, 35)
-SelectWallBtn.Position = UDim2.new(0.05, 0, 0.45, 0)
-SelectWallBtn.BackgroundColor3 = Color3.fromRGB(70, 40, 40)
-SelectWallBtn.Text = "🔒 Chọn Tường Vẽ (Map Bình Xịt)"
-SelectWallBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-SelectWallBtn.Visible = false -- Chỉ hiện khi chọn chế độ 3D
-SelectWallBtn.Parent = MainFrame
-Instance.new("UICorner").Parent = SelectWallBtn
-
--- Nút điều khiển Vẽ và Dừng
-local ActionGrid = Instance.new("Frame")
-ActionGrid.Size = UDim2.new(0.9, 0, 0, 40)
-ActionGrid.Position = UDim2.new(0.05, 0, 0.62, 0)
-ActionGrid.BackgroundTransparency = 1
-ActionGrid.Parent = MainFrame
-
-local StartBtn = Instance.new("TextButton")
-StartBtn.Size = UDim2.new(0.48, 0, 1, 0)
-StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
-StartBtn.Text = "▶ CHẠY"
-StartBtn.TextColor3 = Color3.new(1,1,1)
-StartBtn.Font = Enum.Font.GothamBold
-StartBtn.Parent = ActionGrid
-Instance.new("UICorner").Parent = StartBtn
-
-local StopBtn = Instance.new("TextButton")
-StopBtn.Size = UDim2.new(0.48, 0, 1, 0)
-StopBtn.Position = UDim2.new(0.52, 0, 0, 0)
-StopBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-StopBtn.Text = "⏹ DỪNG"
-StopBtn.TextColor3 = Color3.new(1,1,1)
-StopBtn.Font = Enum.Font.GothamBold
-StopBtn.Parent = ActionGrid
-Instance.new("UICorner").Parent = StopBtn
-
--- Trạng thái & Chú thích bản quyền dưới đáy menu
-local StatusLbl = Instance.new("TextLabel")
-StatusLbl.Size = UDim2.new(1, 0, 0, 25)
+local StatusLbl = Instance.new("TextLabel", MainFrame)
+StatusLbl.Size = UDim2.new(1, 0, 0, 30)
 StatusLbl.Position = UDim2.new(0, 0, 0.8, 0)
+StatusLbl.Text = "Chưa có tọa độ."
+StatusLbl.TextColor3 = Color3.fromRGB(255, 255, 100)
 StatusLbl.BackgroundTransparency = 1
-StatusLbl.Text = "Trạng thái: Đang chờ lệnh..."
-StatusLbl.TextColor3 = Color3.fromRGB(150, 150, 150)
-StatusLbl.Parent = MainFrame
-
-local WatermarkLbl = Instance.new("TextLabel")
-WatermarkLbl.Size = UDim2.new(1, 0, 0, 20)
-WatermarkLbl.Position = UDim2.new(0, 0, 0.92, 0)
-WatermarkLbl.BackgroundTransparency = 1
-WatermarkLbl.Text = State.Watermark
-WatermarkLbl.TextColor3 = Color3.fromRGB(80, 80, 85)
-WatermarkLbl.TextSize = 10
-WatermarkLbl.Font = Enum.Font.Code
-WatermarkLbl.Parent = MainFrame
 
 -- ==========================================
--- 2. LOGIC ĐÓNG / MỞ MENU (TWEEN ANIMATION)
+-- 2. LOGIC LẤY TỌA ĐỘ TỪ CHÂN NHÂN VẬT
 -- ==========================================
-ToggleBtn.MouseButton1Click:Connect(function()
-    State.IsOpen = not State.IsOpen
-    local targetPos = State.IsOpen and UDim2.new(0, 65, 0, 10) or UDim2.new(0, -300, 0, 10)
-    
-    local tween = TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Position = targetPos
-    })
-    tween:Play()
+local function GetPlayerFootPosition()
+    local char = LocalPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        -- Lấy vị trí tâm nhân vật, trừ đi 3 studs trục Y để lấy đúng mặt đất ngay dưới chân
+        return char.HumanoidRootPart.Position - Vector3.new(0, 3, 0)
+    end
+    return nil
+end
+
+BtnPos1.MouseButton1Click:Connect(function()
+    State.Pos1 = GetPlayerFootPosition()
+    if State.Pos1 then
+        BtnPos1.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        BtnPos1.Text = "✅ Đã lưu Góc 1"
+        StatusLbl.Text = "Đã lưu vị trí 1 thành công!"
+    end
 end)
 
--- Chuyển đổi qua lại giữa chế độ 2D và 3D
-ModeBtn.MouseButton1Click:Connect(function()
-    if State.Mode == "2D" then
-        State.Mode = "3D_Spray"
-        ModeBtn.Text = "Chế độ: 3D (Map Bình Xịt)"
-        ModeBtn.TextColor3 = Color3.fromRGB(0, 255, 200)
-        SelectWallBtn.Visible = true
-    else
-        State.Mode = "2D"
-        ModeBtn.Text = "Chế độ: Vẽ 2D (Bình thường)"
-        ModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        SelectWallBtn.Visible = false
+BtnPos2.MouseButton1Click:Connect(function()
+    State.Pos2 = GetPlayerFootPosition()
+    if State.Pos2 then
+        BtnPos2.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        BtnPos2.Text = "✅ Đã lưu Góc 2"
+        StatusLbl.Text = "Đã lưu vị trí 2 thành công!"
     end
 end)
 
 -- ==========================================
--- 3. LOGIC QUÉT VÀ KHÓA TƯỜNG VẼ 3D (RAYCAST)
+-- 3. AUTO-EQUIP VÀ CORE VẼ TRỤC X-Z (MẶT ĐẤT)
 -- ==========================================
-local SelectingWall = false
-SelectWallBtn.MouseButton1Click:Connect(function()
-    SelectingWall = true
-    SelectWallBtn.Text = "Hãy chạm vào bức tường..."
-    SelectWallBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 0)
-end)
-
-UserInputService.TouchStarted:Connect(function(touch, processed)
-    if processed or not SelectingWall then return end
+local function EnsureToolEquipped()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    if char:FindFirstChildOfClass("Tool") then return true end
     
-    -- Bắn một tia Raycast từ camera điện thoại đến điểm chạm màn hình để tìm khối 3D
-    local camera = Workspace.CurrentCamera
-    local ray = camera:ViewportPointToRay(touch.Position.X, touch.Position.Y)
-    local raycastResult = Workspace:Raycast(ray.Origin, ray.Direction * 500)
-    
-    if raycastResult and raycastResult.Instance:IsA("BasePart") then
-        State.TargetWall = raycastResult.Instance
-        SelectWallBtn.Text = "✅ Đã khóa: " .. State.TargetWall.Name
-        SelectWallBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
-        StatusLbl.Text = "Đã nhận diện bề mặt tường 3D!"
-    else
-        SelectWallBtn.Text = "❌ Thử lại! Không tìm thấy tường"
-        SelectWallBtn.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack and backpack:FindFirstChildOfClass("Tool") then
+        char.Humanoid:EquipTool(backpack:FindFirstChildOfClass("Tool"))
+        return true
     end
-    SelectingWall = false
-end)
+    return false
+end
 
--- ==========================================
--- 4. CORE ENGINE VẼ (MÔ PHỎNG & ĐỘT PHÁ 3D MAP)
--- ==========================================
-local function StartExecution()
+local function StartFloorPainting()
+    if not State.Pos1 or not State.Pos2 then
+        StatusLbl.Text = "⚠️ Lỗi: Bạn phải đi bộ và Set đủ 2 góc trước!"
+        return
+    end
+
     State.IsDrawing = true
-    StartBtn.Text = "ĐANG CHẠY"
-    StartBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    ActionBtn.Text = "⏹ ĐANG VẼ... (BẤM ĐỂ DỪNG)"
+    ActionBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 
-    -- Mảng dữ liệu mẫu giả lập ảnh 40x40 pixel (Trong thực tế sẽ fetch từ JSON qua request)
+    if not EnsureToolEquipped() then
+        StatusLbl.Text = "⚠️ Đang tự động cầm công cụ vẽ..."
+        task.wait(0.5)
+    end
+
+    -- Dữ liệu giả lập 40x40 ảnh
     local mockData = {}
     for y = 1, 40 do
-        for x = 1, 40 do
-            table.insert(mockData, {X = x, Y = y, R = math.random(0,255), G = math.random(0,255), B = math.random(0,255)})
-        end
+        for x = 1, 40 do table.insert(mockData, {X=x, Y=y, R=255, G=255, B=255}) end
     end
 
     task.spawn(function()
         for idx, pixel in ipairs(mockData) do
             if not State.IsDrawing then break end
             
-            if State.Mode == "2D" then
-                -- LOGIC 2D: Gọi RemoteEvent thông thường của các game như Free Draw
-                -- Ví dụ: game.ReplicatedStorage.Draw:FireServer(pixel.X, pixel.Y, Color3.fromRGB(pixel.R, pixel.G, pixel.B))
-                
-            elseif State.Mode == "3D_Spray" and State.TargetWall then
-                -- ĐỘT PHÁ 3D: Tự động tính toán lưới tọa độ trên bề mặt tường của map Spray Paint
-                local wall = State.TargetWall
-                
-                -- Chuẩn hóa tọa độ ảnh (1-40) về khoảng tỷ lệ (-0.5 đến 0.5) của Part không gian
-                local percentX = (pixel.X / 40) - 0.5
-                local percentY = 0.5 - (pixel.Y / 40)
-                
-                -- Tính ra vị trí Vector3 chính xác tuyệt đối trên bề mặt tường
-                local worldPosition = wall.CFrame * Vector3.new(percentX * wall.Size.X, percentY * wall.Size.Y, wall.Size.Z / 2 + 0.05)
-                
-                -- ==========================================================
-                -- BẮT LỖI SÂU & GỌI EVENT BÌNH XỊT MÀU TẠI ĐÂY
-                -- Giả sử map dùng Event tên là "SprayPaintEvent"
-                -- pcall giúp nếu game đổi tên Event thì script cũng không bị crash văng game
-                -- pcall(function()
-                --     game.ReplicatedStorage.SprayPaintEvent:FireServer(worldPosition, Color3.fromRGB(pixel.R, pixel.G, pixel.B))
-                -- end)
-                -- ==========================================================
-            end
+            -- TOÁN HỌC TRỤC X-Z CHO MẶT ĐẤT
+            local percentX = pixel.X / 40
+            local percentY = pixel.Y / 40
             
-            StatusLbl.Text = string.format("Đang vẽ: %d/%d pixels", idx, #mockData)
+            -- Nội suy trục X và trục Z, giữ nguyên độ cao Y của mặt đất
+            local worldX = State.Pos1.X + (percentX * (State.Pos2.X - State.Pos1.X))
+            local worldZ = State.Pos1.Z + (percentY * (State.Pos2.Z - State.Pos1.Z))
+            local worldY = State.Pos1.Y 
             
-            -- Anti-kick: Tách nhỏ đợt vẽ để qua mặt bộ lọc Spam của game (Rate limit)
-            if idx % 15 == 0 then
-                task.wait(State.DrawDelay)
-            end
+            local targetFloorPos = Vector3.new(worldX, worldY, worldZ)
+            
+            -- BỌC PCALL ĐỂ CHỐNG CRASH GAME (SAFE FIRE)
+            local success, err = pcall(function()
+                -- [!] DÀNH CHO SẾP: Thay đổi tên Event ở dòng dưới cho khớp với Map
+                -- game.ReplicatedStorage.PaintFloorEvent:FireServer(targetFloorPos, Color3.fromRGB(pixel.R, pixel.G, pixel.B))
+            end)
+            
+            StatusLbl.Text = string.format("Đang vẽ chấm màu thứ: %d / %d", idx, #mockData)
+            
+            if idx % 10 == 0 then task.wait(State.DrawDelay) end
         end
         
         State.IsDrawing = false
-        StartBtn.Text = "▶ CHẠY"
-        StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
-        StatusLbl.Text = "Trạng thái: Hoàn tất tác vụ!"
+        ActionBtn.Text = "▶ BẮT ĐẦU VẼ XUỐNG ĐẤT"
+        ActionBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+        StatusLbl.Text = "Hoàn tất bức tranh!"
     end)
 end
 
-StartBtn.MouseButton1Click:Connect(function()
-    if not State.IsDrawing then StartExecution() end
-end)
-
-StopBtn.MouseButton1Click:Connect(function()
-    State.IsDrawing = false
-    StatusLbl.Text = "Trạng thái: Đã dừng khẩn cấp."
+ActionBtn.MouseButton1Click:Connect(function()
+    if not State.IsDrawing then StartFloorPainting() else State.IsDrawing = false end
 end)
